@@ -100,3 +100,9 @@
   become: false
   when: ssh_key_backup_enabled | default(true)
   tags: [ssh, keys, backup]
+
+# ── Emergency Key (Break-Glass) ───────────────────────────────────────────────
+- name: "SSH Keys | Emergency-Key deployen (Break-Glass Notfallzugang)"
+  ansible.builtin.include_tasks: emergency_key.yml
+  when: ssh_emergency_key_enabled | default(true)
+  tags: [ssh, keys, emergency]

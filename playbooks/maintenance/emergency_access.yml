@@ -1,0 +1,162 @@
+---
+# =============================================================================
+# playbooks/maintenance/emergency_access.yml
+# Emergency Access — Break-Glass Key Deployment
+#
+# Deployt einen separaten Emergency-Key auf alle (oder gewählte) Server.
+# Dieser Key liegt unabhängig vom primären Deploy-Key und ermöglicht Zugang
+# wenn der primäre Key verloren geht (Laptop defekt, Diebstahl, Löschung).
+#
+# VERWENDUNG:
+#
+#   # Emergency-Keys auf alle Server deployen (Routine, z.B. nach Bootstrap):
+#   ansible-playbook playbooks/maintenance/emergency_access.yml
+#
+#   # Nur bestimmte Server:
+#   ansible-playbook playbooks/maintenance/emergency_access.yml \
+#     --limit webservers
+#
+#   # Emergency-Key erneuern (nach Notfallverwendung):
+#   ansible-playbook playbooks/maintenance/emergency_access.yml \
+#     -e "ssh_emergency_key_rotate=true" --limit web01
+#
+#   # Status prüfen (welche Hosts haben Emergency-Key hinterlegt):
+#   ansible-playbook playbooks/maintenance/emergency_access.yml \
+#     --tags emergency_check
+#
+# NOTFALL — Primärer Key verloren:
+#   1. Mit Emergency-Key verbinden:
+#      ssh -i ssh_keys/emergency/<hostname>/id_ed25519 \
+#          -p <port> deploy@<host>
+#
+#   2. Neuen primären Key deployen (via Emergency-Key als Transport):
+#      ansible-playbook playbooks/hardening/ssh_only.yml \
+#          --limit <hostname> \
+#          --private-key ssh_keys/emergency/<hostname>/id_ed25519 \
+#          -e "ssh_key_rotate=true"
+#
+#   3. Emergency-Key danach rotieren:
+#      ansible-playbook playbooks/maintenance/emergency_access.yml \
+#          --limit <hostname> -e "ssh_emergency_key_rotate=true"
+#
+# WICHTIG:
+#   - ssh_keys/emergency/ ist in .gitignore — wird nie committed
+#   - Regelmäßig off-site sichern: ./scripts/backup-keys.sh
+#   - Nach Notfallverwendung: Audit-Log auf betroffenen Hosts prüfen
+# =============================================================================
+
+- name: "Bootstrap | Python sicherstellen"
+  hosts: all
+  gather_facts: false
+  become: true
+  tags: [always]
+  tasks:
+    - ansible.builtin.raw: |
+        test -e /usr/bin/python3 || (apt-get update -qq && apt-get install -y python3)
+      changed_when: false
+
+- name: "🔑 Emergency Access — Break-Glass Key Deployment"
+  hosts: all
+  become: true
+  gather_facts: true
+  serial: 1
+
+  pre_tasks:
+    - name: "Vorbereitung | Verzeichnisse anlegen"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0700"
+      loop:
+        - "{{ playbook_dir }}/../../ssh_keys"
+        - "{{ playbook_dir }}/../../ssh_keys/emergency"
+      delegate_to: localhost
+      become: false
+      tags: [always]
+
+  tasks:
+    # ── Optional: Rotation erzwingen ──────────────────────────────────────────
+    - name: "Emergency Key | Alten Emergency-Key archivieren (bei Rotation)"
+      ansible.builtin.copy:
+        src: "{{ ssh_emergency_key_local_dir }}/{{ inventory_hostname }}/id_ed25519"
+        dest: "{{ ssh_emergency_key_local_dir }}/{{ inventory_hostname }}/id_ed25519.retired.{{ ansible_date_time.date }}"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+      when:
+        - ssh_emergency_key_rotate | default(false) | bool
+        - lookup('ansible.builtin.fileglob',
+            ssh_emergency_key_local_dir + '/' + inventory_hostname + '/id_ed25519') | length > 0
+      tags: [ssh, emergency]
+
+    - name: "Emergency Key | Alten Key löschen (Neugenerierung)"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ ssh_emergency_key_local_dir }}/{{ inventory_hostname }}/id_ed25519"
+        - "{{ ssh_emergency_key_local_dir }}/{{ inventory_hostname }}/id_ed25519.pub"
+      delegate_to: localhost
+      become: false
+      when: ssh_emergency_key_rotate | default(false) | bool
+      tags: [ssh, emergency]
+
+    # ── Emergency-Key deployen ─────────────────────────────────────────────────
+    - name: "Emergency Key | Deployen"
+      ansible.builtin.include_role:
+        name: ssh_hardening
+        tasks_from: emergency_key.yml
+      tags: [ssh, emergency]
+
+    # ── Verifizierung ──────────────────────────────────────────────────────────
+    - name: "Emergency Key | Verifiziere Emergency-Key Login"
+      ansible.builtin.command: >-
+        ssh
+        -i {{ ssh_emergency_key_local_dir }}/{{ inventory_hostname }}/id_ed25519
+        -o UserKnownHostsFile={{ ssh_known_hosts_file }}
+        -o StrictHostKeyChecking=accept-new
+        -o ConnectTimeout=10
+        -o BatchMode=yes
+        -p {{ ssh_port }}
+        {{ ssh_deploy_user }}@{{ ansible_host }}
+        "echo EMERGENCY_OK"
+      register: emergency_verify
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      ignore_errors: true
+      tags: [ssh, emergency, emergency_check]
+
+    - name: "Emergency Key | Verifikations-Ergebnis"
+      ansible.builtin.debug:
+        msg: >-
+          {{ '✅ Emergency-Key Login ERFOLGREICH' if 'EMERGENCY_OK' in (emergency_verify.stdout | default(''))
+             else '❌ Emergency-Key Login FEHLGESCHLAGEN — Key manuell prüfen!' }}
+          ({{ inventory_hostname }}: {{ ssh_deploy_user }}@{{ ansible_host }}:{{ ssh_port }})
+      tags: [ssh, emergency, emergency_check]
+
+    - name: "Emergency Key | FEHLER bei Verifikation"
+      ansible.builtin.fail:
+        msg: |
+          Emergency-Key Login fehlgeschlagen auf {{ inventory_hostname }}!
+          Manuell prüfen:
+            ssh -i {{ ssh_emergency_key_local_dir }}/{{ inventory_hostname }}/id_ed25519 \
+                -p {{ ssh_port }} {{ ssh_deploy_user }}@{{ ansible_host }}
+          Authorized keys auf Server:
+            cat /home/{{ ssh_deploy_user }}/.ssh/authorized_keys
+      when: "'EMERGENCY_OK' not in (emergency_verify.stdout | default(''))"
+      tags: [ssh, emergency, emergency_check]
+
+  post_tasks:
+    - name: "Übersicht | Emergency-Keys Status"
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "  Emergency Access Status"
+          - "========================================="
+          - "  Host:     {{ inventory_hostname }}"
+          - "  Key:      {{ ssh_emergency_key_local_dir }}/{{ inventory_hostname }}/id_ed25519"
+          - "  Login:    ✅ Verifiziert"
+          - "  Notfall:  ssh -i <key> -p {{ ssh_port }} {{ ssh_deploy_user }}@{{ ansible_host }}"
+          - "========================================="
+      tags: [always]

@@ -1,0 +1,111 @@
+---
+# =============================================================================
+# SSH Hardening | Task-Datei: Emergency Key Management
+# Generiert und deployt einen Break-Glass Emergency Key pro Host.
+#
+# Zweck: Ermöglicht SSH-Zugang wenn der primäre Deploy-Key verloren geht
+#        (z.B. Controller-Verlust, versehentliches Löschen, Diebstahl).
+#
+# Wichtig:
+#   - Emergency-Key wird ADDITIV hinterlegt (exclusive: false)
+#   - Nie zusammen mit primärem Key rotieren
+#   - Separat vom primären Backup off-site sichern
+#   - Nur im Notfall verwenden (danach Audit-Log prüfen)
+#
+# Verwendung nach Key-Verlust:
+#   ssh -i ssh_keys/emergency/<hostname>/id_ed25519 \
+#       -p <port> deploy@<host>
+#
+#   Danach neuen primären Key deployen:
+#   ansible-playbook playbooks/hardening/ssh_only.yml \
+#       --limit <hostname> \
+#       --private-key ssh_keys/emergency/<hostname>/id_ed25519 \
+#       -e "ssh_key_rotate=true"
+# =============================================================================
+
+- name: "Emergency Key | Erstelle lokales Verzeichnis"
+  ansible.builtin.file:
+    path: "{{ ssh_emergency_key_local_dir }}/{{ inventory_hostname }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  tags: [ssh, emergency, keys]
+
+- name: "Emergency Key | Prüfe ob Emergency-Key bereits existiert"
+  ansible.builtin.stat:
+    path: "{{ ssh_emergency_key_local_dir }}/{{ inventory_hostname }}/id_ed25519"
+  register: emergency_key_stat
+  delegate_to: localhost
+  become: false
+  tags: [ssh, emergency, keys]
+
+- name: "Emergency Key | Generiere Ed25519 Emergency-Key (einmalig)"
+  community.crypto.openssh_keypair:
+    path: "{{ ssh_emergency_key_local_dir }}/{{ inventory_hostname }}/id_ed25519"
+    type: ed25519
+    comment: "emergency-break-glass_{{ inventory_hostname }}_{{ ansible_date_time.date }}"
+    mode: "0600"
+    passphrase: ""
+  delegate_to: localhost
+  become: false
+  when: not emergency_key_stat.stat.exists
+  register: emergency_keypair
+  tags: [ssh, emergency, keys]
+
+- name: "Emergency Key | Lese Emergency-Public-Key"
+  ansible.builtin.slurp:
+    src: "{{ ssh_emergency_key_local_dir }}/{{ inventory_hostname }}/id_ed25519.pub"
+  register: emergency_pubkey_content
+  delegate_to: localhost
+  become: false
+  tags: [ssh, emergency, keys]
+
+- name: "Emergency Key | Hinterlege Emergency-Key in authorized_keys (additiv)"
+  ansible.posix.authorized_key:
+    user: "{{ ssh_deploy_user }}"
+    state: present
+    key: "{{ emergency_pubkey_content.content | b64decode }}"
+    exclusive: false
+  tags: [ssh, emergency, keys]
+
+- name: "Emergency Key | Erstelle Notfall-Anleitung (README)"
+  ansible.builtin.copy:
+    content: |
+      # SSH Emergency Key — {{ inventory_hostname }}
+      # Generiert: {{ ansible_date_time.iso8601 }}
+      # Typ: Ed25519 (passwortlos)
+      # Zweck: Break-Glass Notfallzugang bei verlorenem primären Deploy-Key
+      #
+      # ⚠️  SICHER AUFBEWAHREN — niemals ins Git committen!
+      # ⚠️  Regelmäßig off-site sichern (GPG-verschlüsselt auf USB oder Passwortmanager)
+      # ⚠️  Nach Notfallverwendung: Audit-Log prüfen + neuen primären Key deployen
+      #
+      # SCHRITT 1 — Notfallzugang:
+      #   ssh -i {{ ssh_emergency_key_local_dir }}/{{ inventory_hostname }}/id_ed25519 \
+      #       -p {{ ssh_port }} {{ ssh_deploy_user }}@{{ ansible_host }}
+      #
+      # SCHRITT 2 — Neuen primären Key deployen:
+      #   ansible-playbook playbooks/hardening/ssh_only.yml \
+      #       --limit {{ inventory_hostname }} \
+      #       --private-key {{ ssh_emergency_key_local_dir }}/{{ inventory_hostname }}/id_ed25519 \
+      #       -e "ssh_key_rotate=true"
+      #
+      # SCHRITT 3 — Emergency-Key danach rotieren (Sicherheitshygiene):
+      #   ansible-playbook playbooks/maintenance/emergency_access.yml \
+      #       --limit {{ inventory_hostname }} \
+      #       -e "ssh_emergency_key_rotate=true"
+    dest: "{{ ssh_emergency_key_local_dir }}/{{ inventory_hostname }}/README.txt"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  tags: [ssh, emergency, keys]
+
+- name: "Emergency Key | ✅ Emergency-Key bereitgestellt"
+  ansible.builtin.debug:
+    msg:
+      - "✅ Emergency-Key für {{ inventory_hostname }} aktiv"
+      - "   Pfad: {{ ssh_emergency_key_local_dir }}/{{ inventory_hostname }}/id_ed25519"
+      - "   {{ 'NEU generiert' if (emergency_keypair is defined and emergency_keypair.changed) else 'Bereits vorhanden — kein Update' }}"
+      - "   Notfall: ssh -i <pfad> -p {{ ssh_port }} {{ ssh_deploy_user }}@{{ ansible_host }}"
+  tags: [ssh, emergency, keys]

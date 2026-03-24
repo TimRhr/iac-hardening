@@ -1,0 +1,189 @@
+---
+# =============================================================================
+# playbooks/maintenance/revoke_key.yml
+# SSH-Key Revocation — Einzelnen Key sofort sperren
+#
+# Anwendungsfälle:
+#   - Laptop gestohlen → primären Deploy-Key sofort entfernen
+#   - Mitarbeiter verlässt das Team → persönlichen Key entfernen
+#   - Kompromittierter Key → sofortige Sperrung
+#
+# Voraussetzung: Der Ansible-Controller muss noch SSH-Zugang haben.
+#   - Primärer Deploy-Key funktioniert noch: Standard-Ausführung
+#   - Primärer Key verloren, Emergency-Key noch vorhanden:
+#     ansible-playbook ... --private-key ssh_keys/emergency/<host>/id_ed25519
+#
+# VERWENDUNG:
+#
+#   # Key per Datei widerrufen (empfohlen — eindeutig):
+#   ansible-playbook playbooks/maintenance/revoke_key.yml \
+#     -e "revoke_key_file=ssh_keys/web01/id_ed25519.pub"
+#
+#   # Key per Kommentar-Muster widerrufen:
+#   ansible-playbook playbooks/maintenance/revoke_key.yml \
+#     -e "revoke_key_comment=ansible-managed" --limit web01
+#
+#   # Primären Deploy-Key entfernen (Emergency-Key bleibt):
+#   ansible-playbook playbooks/maintenance/revoke_key.yml \
+#     -e "revoke_key_file=ssh_keys/web01/id_ed25519.pub" --limit web01
+#
+#   # Nur auf bestimmten Hosts:
+#   ansible-playbook playbooks/maintenance/revoke_key.yml \
+#     -e "revoke_key_file=ssh_keys/web01/id_ed25519.pub" --limit webservers
+#
+#   # Dry-Run (zeigt was entfernt würde):
+#   ansible-playbook playbooks/maintenance/revoke_key.yml \
+#     -e "revoke_key_file=..." --check
+#
+# WICHTIG:
+#   - Mindestens ein gültiger Key muss in authorized_keys verbleiben
+#   - Emergency-Key NICHT widerrufen ohne vorher neuen Key zu deployen
+#   - Nach Revocation: Login mit widerrufenem Key testen (muss fehlschlagen)
+# =============================================================================
+
+- name: "Bootstrap | Python sicherstellen"
+  hosts: all
+  gather_facts: false
+  become: true
+  tags: [always]
+  tasks:
+    - ansible.builtin.raw: |
+        test -e /usr/bin/python3 || (apt-get update -qq && apt-get install -y python3)
+      changed_when: false
+
+- name: "🚫 SSH-Key Revocation"
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    revoke_key_file: ""       # Pfad zur .pub-Datei (lokal auf Controller)
+    revoke_key_comment: ""    # Kommentar-Muster (alternativ zu revoke_key_file)
+
+  pre_tasks:
+    - name: "Validierung | Parameter prüfen"
+      ansible.builtin.fail:
+        msg: |
+          Kein zu widerrufender Key angegeben!
+          Verwende einen der folgenden Parameter:
+            -e "revoke_key_file=ssh_keys/<host>/id_ed25519.pub"
+            -e "revoke_key_comment=<kommentar-muster>"
+      when:
+        - revoke_key_file == ""
+        - revoke_key_comment == ""
+      tags: [always]
+
+    - name: "Validierung | Prüfe ob revoke_key_file existiert"
+      ansible.builtin.stat:
+        path: "{{ revoke_key_file }}"
+      register: revoke_file_stat
+      delegate_to: localhost
+      become: false
+      when: revoke_key_file != ""
+      tags: [always]
+
+    - name: "Validierung | Abbruch — Key-Datei nicht gefunden"
+      ansible.builtin.fail:
+        msg: "Key-Datei nicht gefunden: {{ revoke_key_file }}"
+      when:
+        - revoke_key_file != ""
+        - not revoke_file_stat.stat.exists
+      tags: [always]
+
+    - name: "Vorbereitung | Key-Inhalt aus Datei lesen"
+      ansible.builtin.set_fact:
+        revoke_key_content: "{{ lookup('ansible.builtin.file', revoke_key_file) }}"
+      when: revoke_key_file != ""
+      tags: [always]
+
+  tasks:
+    # ── Aktuellen Stand prüfen ─────────────────────────────────────────────────
+    - name: "Revoke | Zeige aktuelle authorized_keys vor Änderung"
+      ansible.builtin.command:
+        cmd: "cat /home/{{ ssh_deploy_user }}/.ssh/authorized_keys"
+      register: revoke_authkeys_before
+      changed_when: false
+      failed_when: false
+      tags: [ssh, revoke]
+
+    - name: "Revoke | Anzahl Keys vor Revocation"
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: {{ revoke_authkeys_before.stdout_lines | length }} Key(s) in authorized_keys
+      tags: [ssh, revoke]
+
+    - name: "Revoke | WARNUNG — Nur noch 1 Key vorhanden!"
+      ansible.builtin.debug:
+        msg: |
+          ⚠️  WARNUNG: Auf {{ inventory_hostname }} ist nur 1 Key in authorized_keys.
+          Nach dem Widerrufen ist kein SSH-Zugang mehr möglich!
+          Abbrechen mit Ctrl+C oder fortfahren auf eigene Gefahr.
+      when: revoke_authkeys_before.stdout_lines | select('match', '^ssh-') | list | length <= 1
+      tags: [ssh, revoke]
+
+    # ── Key per Datei widerrufen ───────────────────────────────────────────────
+    - name: "Revoke | Entferne Key aus authorized_keys (via Datei)"
+      ansible.posix.authorized_key:
+        user: "{{ ssh_deploy_user }}"
+        key: "{{ revoke_key_content }}"
+        state: absent
+      when: revoke_key_file != ""
+      tags: [ssh, revoke]
+
+    # ── Key per Kommentar widerrufen ───────────────────────────────────────────
+    - name: "Revoke | Entferne Keys mit passendem Kommentar"
+      ansible.builtin.shell: |
+        if [ -f "/home/{{ ssh_deploy_user }}/.ssh/authorized_keys" ]; then
+          grep -v "{{ revoke_key_comment }}" \
+            /home/{{ ssh_deploy_user }}/.ssh/authorized_keys \
+            > /tmp/authorized_keys_new
+          mv /tmp/authorized_keys_new \
+            /home/{{ ssh_deploy_user }}/.ssh/authorized_keys
+          chown {{ ssh_deploy_user }}:{{ ssh_deploy_user }} \
+            /home/{{ ssh_deploy_user }}/.ssh/authorized_keys
+          chmod 600 /home/{{ ssh_deploy_user }}/.ssh/authorized_keys
+        fi
+      args:
+        executable: /bin/bash
+      when: revoke_key_comment != ""
+      tags: [ssh, revoke]
+
+    # ── Verifikation ───────────────────────────────────────────────────────────
+    - name: "Revoke | Prüfe authorized_keys nach Revocation"
+      ansible.builtin.command:
+        cmd: "cat /home/{{ ssh_deploy_user }}/.ssh/authorized_keys"
+      register: revoke_authkeys_after
+      changed_when: false
+      failed_when: false
+      tags: [ssh, revoke]
+
+    - name: "Revoke | Prüfe ob revozierter Key noch vorhanden ist"
+      ansible.builtin.fail:
+        msg: |
+          Key konnte nicht entfernt werden auf {{ inventory_hostname }}!
+          Manuell prüfen:
+            cat /home/{{ ssh_deploy_user }}/.ssh/authorized_keys
+      when:
+        - revoke_key_file != ""
+        - revoke_key_content.split()[1] | default('') in (revoke_authkeys_after.stdout | default(''))
+      tags: [ssh, revoke]
+
+    - name: "Revoke | ✅ Zusammenfassung"
+      ansible.builtin.debug:
+        msg:
+          - "======================================================="
+          - "  SSH-Key Revocation"
+          - "======================================================="
+          - "  Host:       {{ inventory_hostname }}"
+          - "  Key:        {{ revoke_key_file if revoke_key_file != '' else 'Kommentar: ' + revoke_key_comment }}"
+          - "  Status:     ✅ Key entfernt"
+          - "  Keys übrig: {{ revoke_authkeys_after.stdout_lines | select('match', '^ssh-') | list | length }}"
+          - "======================================================="
+          - "  NÄCHSTE SCHRITTE:"
+          - "  1. Alten Key-Login testen (muss fehlschlagen):"
+          - "     ssh -i <revozierter_key> {{ ssh_deploy_user }}@{{ ansible_host }}"
+          - "  2. Falls Emergency-Key revoziert: sofort neuen deployen:"
+          - "     ansible-playbook playbooks/maintenance/emergency_access.yml \\"
+          - "         --limit {{ inventory_hostname }}"
+          - "======================================================="
+      tags: [ssh, revoke]

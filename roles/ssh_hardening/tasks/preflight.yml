@@ -4,6 +4,40 @@
 # Prüft Voraussetzungen BEVOR die Härtung beginnt, damit kein Lock-out passiert.
 # =============================================================================
 
+- name: "Pre-Flight | Erstelle ssh_keys-Verzeichnis auf Controller"
+  ansible.builtin.file:
+    path: "{{ ssh_key_local_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  tags: [ssh, preflight]
+
+- name: "Pre-Flight | Erfasse SSH Host-Key für known_hosts (TOFU)"
+  ansible.builtin.command: >-
+    ssh-keyscan -p {{ ssh_port }} -H {{ ansible_host }}
+  register: preflight_keyscan
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  failed_when: false
+  when: ssh_strict_host_checking | default(true)
+  tags: [ssh, preflight]
+
+- name: "Pre-Flight | Aktualisiere lokale known_hosts"
+  ansible.builtin.blockinfile:
+    path: "{{ ssh_known_hosts_file }}"
+    block: "{{ preflight_keyscan.stdout }}"
+    marker: "# {mark} ANSIBLE MANAGED: {{ inventory_hostname }}"
+    create: true
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  when:
+    - ssh_strict_host_checking | default(true)
+    - preflight_keyscan.stdout | default('') | length > 0
+  tags: [ssh, preflight]
+
 - name: "Pre-Flight | Prüfe ob SSH-Key für Deploy-User existiert"
   ansible.builtin.stat:
     path: "{{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519.pub"

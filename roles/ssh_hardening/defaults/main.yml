@@ -124,3 +124,16 @@ ssh_firewall_enable: false           # UFW einschalten (Vorsicht: erst testen!)
 # --- Key-Rotation (BSI SYS.1.3.A4) ------------------------------------------
 # Rotationszyklus in Tagen (0 = deaktiviert)
 ssh_key_rotation_days: 180           # 6 Monate — BSI-Empfehlung
+
+# --- Notfallzugang (Emergency Access) ----------------------------------------
+# Break-Glass Key — Zugang wenn primärer Deploy-Key verloren geht
+# Der Emergency-Key wird ZUSÄTZLICH zum Deploy-Key in authorized_keys hinterlegt.
+# WICHTIG: Separat und verschlüsselt sichern (off-site Backup)
+ssh_emergency_key_enabled: true
+ssh_emergency_key_local_dir: "{{ ssh_key_local_dir }}/emergency"
+
+# --- Known Hosts Management --------------------------------------------------
+# Lokale known_hosts Datei für sichere SSH-Verifikation ohne StrictHostKeyChecking=no
+# Verhindert MITM-Angriffe bei Rotation/Verifikation
+ssh_known_hosts_file: "{{ ssh_key_local_dir }}/known_hosts"
+ssh_strict_host_checking: true
