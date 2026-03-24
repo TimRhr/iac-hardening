@@ -1,0 +1,93 @@
+---
+# =============================================================================
+# OS Hardening | Sudo-Härtung
+# =============================================================================
+
+- name: "Sudo | visudo-Paket sicherstellen"
+  ansible.builtin.package:
+    name: sudo
+    state: present
+  tags: [os, sudo]
+
+- name: "Sudo | Backup der sudoers-Datei"
+  ansible.builtin.copy:
+    src: /etc/sudoers
+    dest: /etc/sudoers.hardening-backup
+    remote_src: true
+    force: false
+    mode: "0440"
+  tags: [os, sudo, backup]
+
+- name: "Sudo | Gehärtete sudoers-Konfiguration deployen"
+  ansible.builtin.template:
+    src: sudoers-hardening.j2
+    dest: /etc/sudoers.d/99-hardening
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "visudo -cf %s"    # Syntaxprüfung VOR dem Schreiben
+  tags: [os, sudo]
+
+- name: "Sudo | sudo.conf konfigurieren"
+  ansible.builtin.template:
+    src: sudo.conf.j2
+    dest: /etc/sudo.conf
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [os, sudo]
+
+- name: "Sudo | /etc/sudoers.d Verzeichnis absichern"
+  ansible.builtin.file:
+    path: /etc/sudoers.d
+    owner: root
+    group: root
+    mode: "0750"
+    state: directory
+  tags: [os, sudo, permissions]
+
+- name: "Sudo | Berechtigungen auf sudoers.d-Dateien prüfen"
+  ansible.builtin.shell: |
+    find /etc/sudoers.d -type f | while read f; do
+      perm=$(stat -c "%a" "$f")
+      if [ "$perm" != "440" ] && [ "$perm" != "400" ]; then
+        echo "WARNUNG: $f hat Berechtigungen $perm"
+        chmod 440 "$f"
+      fi
+    done
+  args:
+    executable: /bin/bash
+  register: sudoers_perms
+  changed_when: "'WARNUNG' in sudoers_perms.stdout"
+  tags: [os, sudo, permissions]
+
+- name: "Sudo | WARNUNG — sudoers.d-Dateien mit falschen Rechten korrigiert"
+  ansible.builtin.debug:
+    msg: "{{ sudoers_perms.stdout_lines }}"
+  when: sudoers_perms.changed
+  tags: [os, sudo, permissions]
+
+- name: "Sudo | Prüfe NOPASSWD-Einträge (Sicherheitsrisiko)"
+  ansible.builtin.shell: |
+    grep -r "NOPASSWD" /etc/sudoers /etc/sudoers.d/ 2>/dev/null \
+      | grep -v "^#" | grep -v "hardening" || true
+  args:
+    executable: /bin/bash
+  register: nopasswd_entries
+  changed_when: false
+  tags: [os, sudo, audit]
+
+- name: "Sudo | WARNUNG — NOPASSWD-Einträge gefunden"
+  ansible.builtin.debug:
+    msg: "⚠️  NOPASSWD-Einträge (prüfen ob gewollt):\n{{ nopasswd_entries.stdout }}"
+  when: nopasswd_entries.stdout != ""
+  tags: [os, sudo, audit]
+
+- name: "Sudo | sudo-Log-Verzeichnis sicherstellen"
+  ansible.builtin.file:
+    path: "{{ os_sudo_log_dir }}"
+    owner: root
+    group: root
+    mode: "0750"
+    state: directory
+  tags: [os, sudo]

@@ -1,0 +1,29 @@
+# =============================================================================
+# /etc/audit/auditd.conf
+# Generiert von Ansible OS Hardening Role
+# =============================================================================
+
+# Log-Dateigröße in MB
+max_log_file = {{ os_auditd_max_log_file }}
+
+# Aktion wenn max. Größe erreicht: rotate, keep_logs, syslog, suspend, halt
+max_log_file_action = {{ os_auditd_max_log_file_action }}
+
+# Anzahl rotierter Log-Dateien
+num_logs = {{ os_auditd_num_logs }}
+
+# Aktion wenn Speicherplatz zur Neige geht
+space_left_action = {{ os_auditd_space_left_action }}
+admin_space_left_action = {{ os_auditd_admin_space_left_action }}
+
+# Log-Format
+log_format = ENRICHED
+log_group = root
+
+# Puffer-Größe (Kernel)
+buffer_size = 8192
+
+# Priorität
+priority_boost = 4
+flush = INCREMENTAL_ASYNC
+freq = 50

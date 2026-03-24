@@ -1,0 +1,37 @@
+---
+# =============================================================================
+# playbooks/hardening/os_only.yml — Nur OS-Härtung
+#
+# VERWENDUNG:
+#   ansible-playbook playbooks/hardening/os_only.yml
+#   ansible-playbook playbooks/hardening/os_only.yml --tags kernel
+#   ansible-playbook playbooks/hardening/os_only.yml --tags auditd
+#   ansible-playbook playbooks/hardening/os_only.yml --tags fail2ban
+# =============================================================================
+
+- name: "Bootstrap | Python sicherstellen"
+  hosts: all
+  gather_facts: false
+  become: true
+  tags: [always]
+  tasks:
+    - ansible.builtin.raw: |
+        test -e /usr/bin/python3 || (apt-get update -qq && apt-get install -y python3)
+      changed_when: false
+
+- name: "🛡️ OS Hardening"
+  hosts: all
+  become: true
+  gather_facts: true
+  pre_tasks:
+    - ansible.builtin.file:
+        path: "{{ playbook_dir }}/../../reports"
+        state: directory
+        mode: "0750"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      tags: [always]
+  roles:
+    - role: os_hardening
+      tags: [os, hardening]

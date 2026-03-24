@@ -1,0 +1,49 @@
+---
+# =============================================================================
+# OS Hardening | Zeit — NTP & Timezone
+# Korrekte Zeit ist Pflicht für Audit-Logs, Zertifikate und Kerberos
+# =============================================================================
+
+- name: "Zeit | Timezone setzen"
+  community.general.timezone:
+    name: "{{ os_timezone }}"
+  notify: Restart cron
+  tags: [os, time]
+
+- name: "Zeit | systemd-timesyncd konfigurieren (NTP)"
+  ansible.builtin.template:
+    src: timesyncd.conf.j2
+    dest: /etc/systemd/timesyncd.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart timesyncd
+  when: ansible_service_mgr == 'systemd'
+  tags: [os, time, ntp]
+
+- name: "Zeit | timesyncd aktivieren"
+  ansible.builtin.service:
+    name: systemd-timesyncd
+    state: started
+    enabled: true
+  when:
+    - ansible_service_mgr == 'systemd'
+    - os_ntp_enabled | default(true)
+  tags: [os, time, ntp]
+
+- name: "Zeit | NTP-Synchronisation erzwingen"
+  ansible.builtin.command: timedatectl set-ntp true
+  changed_when: false
+  when: ansible_service_mgr == 'systemd'
+  tags: [os, time, ntp]
+
+- name: "Zeit | Aktuelle Zeitkonfiguration anzeigen"
+  ansible.builtin.command: timedatectl show
+  register: timectl_status
+  changed_when: false
+  tags: [os, time]
+
+- name: "Zeit | Zeitkonfiguration"
+  ansible.builtin.debug:
+    msg: "{{ timectl_status.stdout_lines }}"
+  tags: [os, time]

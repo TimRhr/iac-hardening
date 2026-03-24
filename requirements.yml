@@ -1,0 +1,16 @@
+---
+# =============================================================================
+# requirements.yml — Ansible Collections & Roles
+# Installieren mit:
+#   ansible-galaxy collection install -r requirements.yml -p collections/
+# =============================================================================
+
+collections:
+  - name: community.general       # ufw, timezone, modprobe, archive
+    version: ">=7.0.0"
+  - name: community.crypto        # openssh_keypair
+    version: ">=2.15.0"
+  - name: ansible.posix           # authorized_key, firewalld, sysctl, mount
+    version: ">=1.5.4"
+
+roles: []

@@ -1,0 +1,164 @@
+---
+# =============================================================================
+# SSH Hardening Role - Main Tasks
+# Reihenfolge: preflight → keygen → config → firewall → verify → audit
+# =============================================================================
+
+# ---------------- 1. PRE-FLIGHT CHECKS ---------------------------------------
+- name: "Phase 1 | Pre-Flight Checks"
+  ansible.builtin.include_tasks: preflight.yml
+  tags: [ssh, preflight, hardening]
+
+# ---------------- 2. SSH KEY GENERIERUNG & DEPLOYMENT -----------------------
+- name: "Phase 2 | SSH Key Management"
+  ansible.builtin.include_tasks: key_management.yml
+  when: ssh_manage_keys | default(true)
+  tags: [ssh, keys, keygen, hardening]
+
+# ---------------- 3. PAKETE & VORBEREITUNG -----------------------------------
+- name: "Phase 3 | OpenSSH sicherstellen"
+  ansible.builtin.package:
+    name: openssh-server
+    state: present
+  tags: [ssh, hardening, packages]
+
+- name: "Phase 3 | Backup der originalen sshd_config (nur einmalig)"
+  ansible.builtin.copy:
+    src: /etc/ssh/sshd_config
+    dest: /etc/ssh/sshd_config.backup
+    remote_src: true
+    force: false
+    owner: root
+    group: root
+    mode: "0600"
+  tags: [ssh, hardening, backup]
+
+- name: "Phase 3 | Zeitgestempeltes Backup (jeder Run)"
+  ansible.builtin.copy:
+    src: /etc/ssh/sshd_config
+    dest: "/etc/ssh/sshd_config.{{ ansible_date_time.date }}"
+    remote_src: true
+    force: true
+    owner: root
+    group: root
+    mode: "0600"
+  tags: [ssh, hardening, backup]
+
+# ---------------- 4. HOST KEYS -----------------------------------------------
+- name: "Phase 4 | Entferne unsichere Host Keys (DSA, ECDSA, v1)"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/ssh/ssh_host_dsa_key
+    - /etc/ssh/ssh_host_dsa_key.pub
+    - /etc/ssh/ssh_host_v1_key
+    - /etc/ssh/ssh_host_ecdsa_key
+    - /etc/ssh/ssh_host_ecdsa_key.pub
+  tags: [ssh, hardening, keys]
+
+- name: "Phase 4 | Generiere Ed25519 Host Key"
+  ansible.builtin.command:
+    cmd: ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -N ""
+    creates: /etc/ssh/ssh_host_ed25519_key
+  notify: Restart sshd
+  tags: [ssh, hardening, keys]
+
+- name: "Phase 4 | Setze korrekte Rechte auf Host Keys"
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "/etc/ssh/ssh_host_ed25519_key",    mode: "0600" }
+    - { path: "/etc/ssh/ssh_host_ed25519_key.pub", mode: "0644" }
+    - { path: "/etc/ssh/ssh_host_rsa_key",          mode: "0600" }
+    - { path: "/etc/ssh/ssh_host_rsa_key.pub",      mode: "0644" }
+  failed_when: false
+  tags: [ssh, hardening, keys]
+
+- name: "Phase 4 | Entferne schwache DH-Moduli (< 3072 Bit)"
+  ansible.builtin.shell: |
+    cp /etc/ssh/moduli /etc/ssh/moduli.backup
+    awk '$5 >= 3071' /etc/ssh/moduli > /tmp/moduli_safe
+    mv /tmp/moduli_safe /etc/ssh/moduli
+  args:
+    executable: /bin/bash
+  args:
+    creates: /etc/ssh/moduli.backup
+  notify: Restart sshd
+  tags: [ssh, hardening, crypto]
+
+# ---------------- 5. SSH BANNER ----------------------------------------------
+- name: "Phase 5 | Erstelle SSH Login-Banner"
+  ansible.builtin.copy:
+    content: "{{ ssh_banner_text }}"
+    dest: "{{ ssh_banner_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: ssh_banner_enabled
+  tags: [ssh, hardening, banner]
+
+# ---------------- 6. SSHD_CONFIG DEPLOYEN ------------------------------------
+- name: "Phase 6 | Deploye gehärtete sshd_config"
+  ansible.builtin.template:
+    src: sshd_config.j2
+    dest: /etc/ssh/sshd_config
+    owner: root
+    group: root
+    mode: "0600"
+    validate: "sshd -t -f %s"
+  notify: Restart sshd
+  tags: [ssh, hardening, config]
+
+- name: "Phase 6 | Nochmalige Syntax-Prüfung nach Deploy"
+  ansible.builtin.command: sshd -t
+  changed_when: false
+  tags: [ssh, hardening, validate]
+
+# ---------------- 7. FIREWALL ------------------------------------------------
+- name: "Phase 7 | Firewall konfigurieren"
+  ansible.builtin.include_tasks: firewall.yml
+  tags: [ssh, hardening, firewall]
+
+# ---------------- 8. SERVICE -------------------------------------------------
+- name: "Phase 8 | sshd aktivieren und starten"
+  ansible.builtin.service:
+    name: "{{ 'ssh' if ansible_os_family == 'Debian' else 'sshd' }}"
+    state: started
+    enabled: true
+  tags: [ssh, hardening, service]
+
+- name: "Phase 8 | Handler sofort ausführen (sshd neu starten)"
+  ansible.builtin.meta: flush_handlers
+  tags: [ssh, hardening, service]
+
+# ---------------- 9. VERIFIKATION & ROLLBACK ---------------------------------
+- name: "Phase 9 | Verifiziere SSH-Zugang & Rollback bei Fehler"
+  ansible.builtin.include_tasks: verify_and_rollback.yml
+  when: ssh_verify_after_hardening | default(true)
+  tags: [ssh, hardening, verify, rollback]
+
+# ---------------- 10. AUDIT & REPORTING --------------------------------------
+- name: "Phase 10 | Erstelle Compliance-Report"
+  ansible.builtin.include_tasks: audit.yml
+  when: ssh_audit_enabled | default(true)
+  tags: [ssh, hardening, audit]
+
+# ---------------- ABSCHLUSS --------------------------------------------------
+- name: "✅ SSH Hardening | Zusammenfassung"
+  ansible.builtin.debug:
+    msg:
+      - "======================================================="
+      - "  SSH HARDENING ABGESCHLOSSEN: {{ inventory_hostname }}"
+      - "======================================================="
+      - "  Port:          {{ ssh_port }}"
+      - "  Root Login:    {{ ssh_permit_root_login }}"
+      - "  Passwort-Auth: {{ ssh_password_authentication }}"
+      - "  Deploy User:   {{ ssh_deploy_user }}"
+      - "  Key:           {{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519"
+      - "  Verbindung:    ssh -i <key> -p {{ ssh_port }} {{ ssh_deploy_user }}@{{ ansible_host }}"
+      - "======================================================="
+  tags: [ssh, hardening, summary]

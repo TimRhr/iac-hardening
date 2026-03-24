@@ -1,0 +1,70 @@
+# =============================================================================
+# /etc/systemd/journald.conf.d/99-hardening.conf
+# Generiert von Ansible OS Hardening Role
+# BSI OPS.1.1.5 — Persistente, manipulationssichere Protokollierung
+# WARNUNG: Wird bei Ansible-Run überschrieben!
+# =============================================================================
+
+[Journal]
+
+# ── Speicherort ────────────────────────────────────────────────────────────────
+# persistent: Logs überleben Reboots in /var/log/journal/
+# volatile:   Nur im RAM, geht bei Reboot verloren (BSI: nicht zulässig)
+# auto:       Persistent wenn /var/log/journal existiert
+Storage=persistent
+
+# ── Kompression ───────────────────────────────────────────────────────────────
+# BSI OPS.1.1.5: Speicherplatz schonen ohne Datenverlust
+Compress=yes
+
+# ── Größenbegrenzung ──────────────────────────────────────────────────────────
+# Verhindert Disk-Exhaustion durch Log-Flooding
+SystemMaxUse={{ syslog_journald_max_use }}
+SystemKeepFree={{ syslog_journald_keep_free }}
+SystemMaxFileSize={{ syslog_journald_max_file_size }}
+SystemMaxFiles={{ syslog_journald_max_files }}
+
+# Laufzeit-Logs (/run/log/journal — vor dem Mounten von /var)
+RuntimeMaxUse=100M
+RuntimeKeepFree=20M
+
+# ── Aufbewahrung ──────────────────────────────────────────────────────────────
+# BSI: Mindest-Aufbewahrungsdauer von Logs
+MaxRetentionSec={{ syslog_journald_max_retention_sec }}
+
+# Maximales Alter einer einzelnen Journal-Datei
+MaxFileSec={{ syslog_journald_max_file_sec }}
+
+# ── Weiterleitung ─────────────────────────────────────────────────────────────
+# An rsyslog weitergeben (rsyslog schickt dann an Remote-Server)
+ForwardToSyslog={{ 'yes' if syslog_journald_forward_to_syslog else 'no' }}
+
+# An Kernel-Log weitergeben (für kritische Systemmeldungen)
+ForwardToKMsg=no
+
+# An Konsole weitergeben (nur sinnvoll für Debug)
+ForwardToConsole=no
+
+# An Systemd-Wall (Broadcast an alle Terminals) deaktivieren
+ForwardToWall=no
+
+# ── Sicherheit ────────────────────────────────────────────────────────────────
+# Seal: kryptografische Signaturen für Manipulationsschutz
+# Benötigt systemd-journald-audit (FSS — Forward Secure Sealing)
+{% if syslog_journald_seal | default(false) %}
+Seal=yes
+{% else %}
+# Seal=yes  # Aktivieren für erhöhten Schutzbedarf (BSI H-Anforderung)
+{% endif %}
+
+# Audit-Logs aus Kernel auch in Journal schreiben
+Audit=yes
+
+# ── Rate Limiting ─────────────────────────────────────────────────────────────
+# Schutz vor Log-Flooding durch einzelne Services
+RateLimitIntervalSec={{ syslog_journald_rate_interval }}
+RateLimitBurst={{ syslog_journald_rate_burst }}
+
+# ── Syslog-Identifier-Länge ───────────────────────────────────────────────────
+# Maximale Länge von Syslog-Nachrichten (BSI: keine Verkürzung wichtiger Einträge)
+LineMax=48K

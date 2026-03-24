@@ -1,0 +1,24 @@
+# =============================================================================
+# /etc/systemd/system.conf.d/99-hardening.conf
+# Generiert von Ansible OS Hardening Role
+# Globale systemd-Manager-Härtung
+# =============================================================================
+
+[Manager]
+
+# Standard-Ressourcenlimits für alle Services
+DefaultLimitNOFILE={{ systemd_default_limit_nofile }}
+DefaultLimitNPROC={{ systemd_default_limit_nproc }}
+DefaultLimitCORE=0
+
+# Timeouts
+DefaultTimeoutStartSec={{ systemd_default_timeout_start }}
+DefaultTimeoutStopSec={{ systemd_default_timeout_stop }}
+
+# Crash-Verhalten: kein Reboot bei Kernel-Panic durch einen Service
+CrashChangeVT=no
+CrashShell=no
+CrashReboot=no
+
+# Keine Core-Dumps
+DumpCore=no

@@ -1,0 +1,38 @@
+---
+# =============================================================================
+# OS Hardening | Unattended Upgrades — Automatische Sicherheitsupdates
+# =============================================================================
+
+- name: "Upgrades | Konfiguration deployen"
+  ansible.builtin.template:
+    src: unattended-upgrades.conf.j2
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+  when: ansible_os_family == 'Debian'
+  tags: [os, upgrades]
+
+- name: "Upgrades | Auto-Upgrade Intervall setzen"
+  ansible.builtin.copy:
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Download-Upgradeable-Packages "1";
+      APT::Periodic::AutocleanInterval "7";
+      APT::Periodic::Unattended-Upgrade "1";
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+  when: ansible_os_family == 'Debian'
+  tags: [os, upgrades]
+
+- name: "Upgrades | Service aktivieren"
+  ansible.builtin.service:
+    name: unattended-upgrades
+    state: started
+    enabled: true
+  when:
+    - ansible_os_family == 'Debian'
+    - os_unattended_upgrades | default(true)
+  tags: [os, upgrades]

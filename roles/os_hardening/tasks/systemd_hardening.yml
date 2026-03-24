@@ -1,0 +1,130 @@
+---
+# =============================================================================
+# OS Hardening | systemd Service-Härtung
+# BSI SYS.1.3.A6 · CIS L2
+#
+# Deployt Drop-In-Overrides für kritische System-Dienste mit:
+#   PrivateTmp=yes          — Eigenes /tmp, isoliert vom Rest
+#   NoNewPrivileges=yes     — Keine Privilege-Escalation möglich
+#   ProtectSystem=strict    — /usr, /boot, /etc read-only
+#   ProtectHome=yes         — /home, /root, /run/user nicht zugreifbar
+#   RestrictSUIDSGID=yes    — Keine SUID/SGID-Binaries ausführen
+#   SystemCallFilter        — Erlaubte Syscalls whitelist
+# =============================================================================
+
+# ── Drop-In Verzeichnisse anlegen ─────────────────────────────────────────────
+
+- name: "systemd | Override-Verzeichnisse für gehärtete Dienste anlegen"
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item }}.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ systemd_harden_services }}"
+  tags: [os, systemd]
+
+# ── Generische Härtungs-Overrides deployen ────────────────────────────────────
+
+- name: "systemd | Härtungs-Override für jeden Dienst deployen"
+  ansible.builtin.template:
+    src: systemd-hardening-override.conf.j2
+    dest: "/etc/systemd/system/{{ item }}.d/99-hardening.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ systemd_harden_services }}"
+  register: systemd_overrides_result
+  failed_when: false
+  notify: Reload systemd daemon
+  tags: [os, systemd]
+
+# ── Dienste die nicht laufen sollten deaktivieren ────────────────────────────
+
+- name: "systemd | Unnötige Dienste deaktivieren und stoppen"
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop: "{{ systemd_disable_services }}"
+  failed_when: false
+  tags: [os, systemd, disable]
+
+# ── Sockets die nicht gebraucht werden schließen ─────────────────────────────
+
+- name: "systemd | Unnötige Sockets deaktivieren"
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+    masked: true
+  loop: "{{ systemd_mask_sockets }}"
+  failed_when: false
+  tags: [os, systemd, sockets]
+
+# ── systemd-Manager-Konfiguration absichern ───────────────────────────────────
+
+- name: "systemd | /etc/systemd/system.conf.d Verzeichnis anlegen"
+  ansible.builtin.file:
+    path: /etc/systemd/system.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [os, systemd, config]
+
+- name: "systemd | system.conf — Ressourcen-Limits setzen"
+  ansible.builtin.template:
+    src: systemd-system.conf.j2
+    dest: /etc/systemd/system.conf.d/99-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd daemon
+  tags: [os, systemd, config]
+
+# ── systemd daemon neu laden ──────────────────────────────────────────────────
+
+- name: "systemd | Daemon-Reload ausführen"
+  ansible.builtin.systemd:
+    daemon_reload: true
+  tags: [os, systemd]
+
+# ── Verifikation: Härtungseinstellungen aktiv? ────────────────────────────────
+
+- name: "systemd | Prüfe ob NoNewPrivileges aktiv ist (Stichprobe)"
+  ansible.builtin.shell: |
+    for svc in {{ systemd_harden_services | join(' ') }}; do
+      pid=$(systemctl show "${svc}" -p MainPID 2>/dev/null | cut -d= -f2)
+      if [ -n "$pid" ] && [ "$pid" != "0" ] && [ -f "/proc/${pid}/status" ]; then
+        nnp=$(grep "NoNewPrivs" "/proc/${pid}/status" 2>/dev/null | awk '{print $2}')
+        echo "${svc}: NoNewPrivileges=${nnp:-?}"
+      else
+        echo "${svc}: nicht aktiv / kein Prozess"
+      fi
+    done
+  args:
+    executable: /bin/bash
+  register: systemd_verify
+  changed_when: false
+  failed_when: false
+  tags: [os, systemd, verify]
+
+- name: "systemd | Verifikations-Ergebnis"
+  ansible.builtin.debug:
+    msg: "{{ systemd_verify.stdout_lines }}"
+  tags: [os, systemd, verify]
+
+- name: "systemd | Zusammenfassung"
+  ansible.builtin.debug:
+    msg:
+      - "============================================="
+      - "  systemd Service-Härtung abgeschlossen"
+      - "  BSI SYS.1.3.A6"
+      - "============================================="
+      - "  Gehärtete Dienste: {{ systemd_harden_services | length }}"
+      - "  Deaktiviert:       {{ systemd_disable_services | length }}"
+      - "  Masked:            {{ systemd_mask_sockets | length }}"
+      - "  Overrides unter:   /etc/systemd/system/<service>.d/99-hardening.conf"
+      - "============================================="
+  tags: [os, systemd, summary]

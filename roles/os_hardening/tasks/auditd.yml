@@ -1,0 +1,70 @@
+---
+# =============================================================================
+# OS Hardening | Auditd — Kernel-Audit-System
+# =============================================================================
+
+- name: "Auditd | Paket sicherstellen"
+  ansible.builtin.package:
+    name: "{{ 'auditd' if ansible_os_family == 'Debian' else 'audit' }}"
+    state: present
+  tags: [os, auditd]
+
+- name: "Auditd | Regeln-Verzeichnis sicherstellen"
+  ansible.builtin.file:
+    path: /etc/audit/rules.d
+    owner: root
+    group: root
+    mode: "0750"
+    state: directory
+  tags: [os, auditd]
+
+- name: "Auditd | Konfiguration deployen"
+  ansible.builtin.template:
+    src: auditd.conf.j2
+    dest: /etc/audit/auditd.conf
+    owner: root
+    group: root
+    mode: "0640"
+    validate: "auditd -t"
+  notify: Restart auditd
+  tags: [os, auditd]
+
+- name: "Auditd | Audit-Regeln deployen"
+  ansible.builtin.template:
+    src: audit.rules.j2
+    dest: /etc/audit/rules.d/99-hardening.rules
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Reload audit rules
+  tags: [os, auditd]
+
+- name: "Auditd | Service aktivieren und starten"
+  ansible.builtin.service:
+    name: auditd
+    state: started
+    enabled: true
+  tags: [os, auditd]
+
+- name: "Auditd | Handler sofort ausführen (Regeln laden)"
+  ansible.builtin.meta: flush_handlers
+  tags: [os, auditd]
+
+- name: "Auditd | Warte bis auditd bereit ist"
+  ansible.builtin.wait_for:
+    path: /var/log/audit/audit.log
+    state: present
+    timeout: 15
+  failed_when: false
+  tags: [os, auditd]
+
+- name: "Auditd | Prüfe aktive Regeln"
+  ansible.builtin.command: auditctl -l
+  register: audit_rules_active
+  changed_when: false
+  tags: [os, auditd]
+
+- name: "Auditd | Anzahl aktiver Regeln"
+  ansible.builtin.debug:
+    msg: "✅ {{ audit_rules_active.stdout_lines | length }} Audit-Regeln aktiv"
+  tags: [os, auditd]

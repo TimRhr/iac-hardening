@@ -1,0 +1,15 @@
+---
+# =============================================================================
+# inventory/group_vars/dbservers/main.yml
+# =============================================================================
+
+ssh_port: 2222              # DB-Server auf abweichendem SSH-Port
+ssh_allow_groups:
+  - "ssh-users"
+  - "dba"
+
+# Kein IPv6 auf DB-Servern
+os_ipv6_disable: true
+
+# Strengere Core Dumps — DB enthält sensible Daten
+os_coredump_enabled: false

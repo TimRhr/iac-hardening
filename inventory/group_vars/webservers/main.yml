@@ -1,0 +1,13 @@
+---
+# =============================================================================
+# inventory/group_vars/webservers/main.yml
+# =============================================================================
+
+ssh_allow_groups:
+  - "ssh-users"
+  - "deploy"
+
+# Webserver brauchen keinen DB-Zugriff → strengere Firewall
+os_extra_packages_remove:
+  - mariadb-client
+  - mysql-client

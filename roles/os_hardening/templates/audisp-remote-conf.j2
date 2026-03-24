@@ -1,0 +1,21 @@
+# =============================================================================
+# /etc/audit/audisp-remote.conf
+# Generiert von Ansible OS Hardening Role
+# BSI OPS.1.1.5 — audisp-remote Verbindungsparameter
+# =============================================================================
+
+# Ziel-Server (Audit-Collector / SIEM)
+remote_server = {{ syslog_remote_host | default('') }}
+port = {{ syslog_auditd_remote_port }}
+
+# Lokale Queue bei Verbindungsausfall (verhindert Datenverlust)
+queue_file = /var/spool/audit/audisp-remote.queue
+mode = immediate
+
+# Verhalten bei Queue-Überlauf
+network_failure_action = queue
+disk_full_action = syslog
+disk_error_action = syslog
+
+# Verbindungs-Retry
+heartbeat_timeout = 0

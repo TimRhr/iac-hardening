@@ -1,0 +1,61 @@
+# =============================================================================
+# /etc/systemd/system/{{ item }}.d/99-hardening.conf
+# Generiert von Ansible OS Hardening Role
+# BSI SYS.1.3.A6 — systemd Service-Isolation
+# =============================================================================
+
+[Service]
+
+# ── Privilege-Schutz ──────────────────────────────────────────────────────────
+# Verhindert jede Art von Privilege-Escalation (setuid, capabilities, etc.)
+NoNewPrivileges=yes
+
+# ── Dateisystem-Isolation ─────────────────────────────────────────────────────
+# /usr, /boot, /etc werden read-only gemountet
+ProtectSystem=strict
+
+# /home, /root, /run/user nicht zugreifbar
+ProtectHome=yes
+
+# Eigenes, isoliertes /tmp und /var/tmp für diesen Dienst
+PrivateTmp=yes
+
+# /dev nur mit minimal nötigen Geräten
+PrivateDevices=yes
+
+# ── Kernel-Schutz ─────────────────────────────────────────────────────────────
+# Verhindert Zugriff auf /proc und /sys für andere Prozesse
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+
+# ── Netzwerk-Isolation ────────────────────────────────────────────────────────
+# Nur aktivieren wenn der Dienst kein Netzwerk braucht:
+# PrivateNetwork=yes
+
+# ── SUID/SGID-Schutz ─────────────────────────────────────────────────────────
+RestrictSUIDSGID=yes
+
+# ── Syscall-Filter ────────────────────────────────────────────────────────────
+# Nur sichere Syscall-Klassen erlauben
+{% if systemd_syscall_filter_enabled | default(true) %}
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+{% endif %}
+
+# ── Namespace-Isolation ───────────────────────────────────────────────────────
+RestrictNamespaces=yes
+
+# ── Sonstige Härtung ──────────────────────────────────────────────────────────
+# Kein Zugriff auf Realtime-Scheduling
+RestrictRealtime=yes
+
+# Keine POSIX-Message-Queues von außen nutzbar
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Speicher nicht gleichzeitig schreib- und ausführbar
+MemoryDenyWriteExecute=yes
+
+# Verhindert das Setzen von Linux-Capabilities
+CapabilityBoundingSet=

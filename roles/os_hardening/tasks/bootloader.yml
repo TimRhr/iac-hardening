@@ -1,0 +1,186 @@
+---
+# =============================================================================
+# OS Hardening | Bootloader-Härtung
+# BSI SYS.1.3.A5 · CIS 1.4
+#
+# Maßnahmen:
+#   1. GRUB-Passwort generieren + setzen (verhindert Boot-Parameter-Manipulation)
+#   2. grub.cfg Berechtigungen auf 400 (root-only, read-only)
+#   3. Single-User-Mode und Recovery-Mode mit Passwort schützen
+#   4. GRUB-Konfiguration aktualisieren
+#   5. Backup der GRUB-Konfiguration
+# =============================================================================
+
+# ── 1. Pre-Flight ──────────────────────────────────────────────────────────────
+
+- name: "Bootloader | Pre-Flight | GRUB installiert?"
+  ansible.builtin.stat:
+    path: /etc/default/grub
+  register: bootloader_grub_exists
+  tags: [os, bootloader, preflight]
+
+- name: "Bootloader | Pre-Flight | Info wenn kein GRUB (Cloud-VM / systemd-boot)"
+  ansible.builtin.debug:
+    msg: "ℹ️  /etc/default/grub nicht gefunden — Bootloader-Härtung wird übersprungen."
+  when: not bootloader_grub_exists.stat.exists
+  tags: [os, bootloader, preflight]
+
+- name: "Bootloader | Pre-Flight | grub_available fact setzen"
+  ansible.builtin.set_fact:
+    bootloader_grub_available: "{{ bootloader_grub_exists.stat.exists }}"
+  tags: [os, bootloader, preflight]
+
+- name: "Bootloader | Pre-Flight | grub-mkpasswd-pbkdf2 verfügbar?"
+  ansible.builtin.command: which grub-mkpasswd-pbkdf2
+  register: bootloader_mkpasswd_available
+  changed_when: false
+  failed_when: false
+  tags: [os, bootloader, preflight]
+
+- name: "Bootloader | Pre-Flight | grub2-mkpasswd-pbkdf2 (RHEL)?"
+  ansible.builtin.command: which grub2-mkpasswd-pbkdf2
+  register: bootloader_mkpasswd2_available
+  changed_when: false
+  failed_when: false
+  when: ansible_os_family == 'RedHat'
+  tags: [os, bootloader, preflight]
+
+# ── 2. Pakete sicherstellen ───────────────────────────────────────────────────
+
+- name: "Bootloader | grub2-common installieren (Debian/Ubuntu)"
+  ansible.builtin.apt:
+    name:
+      - grub2-common
+      - grub-common
+    state: present
+  when: ansible_os_family == 'Debian'
+  failed_when: false
+  tags: [os, bootloader, packages]
+
+# ── 3. GRUB-Passwort-Hash generieren ─────────────────────────────────────────
+
+- name: "Bootloader | Prüfe ob GRUB-Passwort bereits gesetzt ist"
+  ansible.builtin.stat:
+    path: /etc/grub.d/40_custom_hardening
+  register: bootloader_passwd_set
+  tags: [os, bootloader, password]
+
+- name: "Bootloader | GRUB-Passwort-Hash aus Variable generieren"
+  ansible.builtin.shell: |
+    echo -e "{{ bootloader_grub_password }}\n{{ bootloader_grub_password }}" \
+      | grub-mkpasswd-pbkdf2 2>/dev/null \
+      | grep "PBKDF2 hash" \
+      | awk '{print $NF}'
+  args:
+    executable: /bin/bash
+  register: bootloader_passwd_hash
+  no_log: true
+  changed_when: false
+  when:
+    - bootloader_grub_password | default('') != ''
+    - bootloader_mkpasswd_available.rc == 0
+  tags: [os, bootloader, password]
+  when: bootloader_grub_available | default(false)
+
+- name: "Bootloader | GRUB-Passwort-Konfiguration deployen"
+  ansible.builtin.template:
+    src: grub-hardening.cfg.j2
+    dest: /etc/grub.d/40_custom_hardening
+    owner: root
+    group: root
+    mode: "0700"
+  when:
+    - bootloader_grub_password | default('') != ''
+    - bootloader_passwd_hash.stdout | default('') != ''
+  notify: Update grub
+  tags: [os, bootloader, password]
+  when: bootloader_grub_available | default(false)
+
+# ── 4. /etc/default/grub härten ───────────────────────────────────────────────
+
+- name: "Bootloader | Backup der originalen GRUB-Konfiguration"
+  ansible.builtin.copy:
+    src: /etc/default/grub
+    dest: /etc/default/grub.orig
+    remote_src: true
+    force: false
+    mode: "0600"
+  tags: [os, bootloader, backup]
+
+- name: "Bootloader | GRUB-Optionen setzen (Sicherheits-Parameter)"
+  ansible.builtin.template:
+    src: grub-default.j2
+    dest: /etc/default/grub
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  notify: Update grub
+  tags: [os, bootloader, config]
+  when: bootloader_grub_available | default(false)
+
+# ── 5. grub.cfg Berechtigungen nach Update setzen ─────────────────────────────
+
+- name: "Bootloader | Handler sofort ausführen (grub-update)"
+  ansible.builtin.meta: flush_handlers
+  tags: [os, bootloader]
+  when: bootloader_grub_available | default(false)
+
+- name: "Bootloader | grub.cfg Berechtigungen auf 400 setzen (CIS 1.4.1)"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    owner: root
+    group: root
+    mode: "0400"
+  loop:
+    - /boot/grub/grub.cfg
+    - /boot/grub2/grub.cfg
+  failed_when: false
+  tags: [os, bootloader, permissions]
+  when: bootloader_grub_available | default(false)
+
+- name: "Bootloader | GRUB-Verzeichnis absichern"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    owner: root
+    group: root
+    mode: "0700"
+  loop:
+    - /boot/grub
+    - /boot/grub2
+  failed_when: false
+  tags: [os, bootloader, permissions]
+  when: bootloader_grub_available | default(false)
+
+# ── 6. Auditd-Regeln für Boot-Konfiguration ───────────────────────────────────
+
+- name: "Bootloader | Auditd-Regeln für Bootloader-Dateien"
+  ansible.builtin.lineinfile:
+    path: /etc/audit/rules.d/99-hardening.rules
+    line: "{{ item }}"
+    state: present
+  loop:
+    - "# Bootloader-Schutz (BSI SYS.1.3.A5 / CIS 1.4)"
+    - "-w /boot/grub/grub.cfg -p wa -k bootloader"
+    - "-w /etc/default/grub -p wa -k bootloader"
+    - "-w /etc/grub.d -p wa -k bootloader"
+  notify: Reload audit rules
+  tags: [os, bootloader, auditd]
+  when: bootloader_grub_available | default(false)
+
+# ── 7. Zusammenfassung ────────────────────────────────────────────────────────
+
+- name: "Bootloader | Zusammenfassung"
+  ansible.builtin.debug:
+    msg:
+      - "============================================="
+      - "  Bootloader-Härtung abgeschlossen"
+      - "  BSI SYS.1.3.A5 · CIS 1.4"
+      - "============================================="
+      - "  GRUB-Passwort:   {{ 'gesetzt' if bootloader_grub_password | default('') != '' else '⚠️  NICHT GESETZT (Vault-Variable fehlt)' }}"
+      - "  grub.cfg:        chmod 400 (root-only)"
+      - "  Recovery-Mode:   {{ 'deaktiviert' if bootloader_disable_recovery else 'aktiv' }}"
+      - "  Auditd-Regeln:   aktiv"
+      - "============================================="
+  tags: [os, bootloader, summary]
+  when: bootloader_grub_available | default(false)

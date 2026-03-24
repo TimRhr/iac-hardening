@@ -1,0 +1,12 @@
+# =============================================================================
+# /etc/audit/plugins.d/au-remote.conf
+# Generiert von Ansible OS Hardening Role
+# BSI OPS.1.1.5 — auditd Remote-Forwarding via audisp-remote
+# =============================================================================
+
+# Plugin aktivieren
+active = yes
+direction = out
+path = /sbin/audisp-remote
+type = always
+format = string

@@ -1,0 +1,123 @@
+---
+# =============================================================================
+# OS Hardening Role — Main Tasks (Orchestrierung)
+# =============================================================================
+
+- name: "OS | Phase 1 | Pakete"
+  ansible.builtin.include_tasks: packages.yml
+  tags: [os, hardening, packages]
+
+- name: "OS | Phase 1b | Bootloader-Härtung"
+  ansible.builtin.include_tasks: bootloader.yml
+  when: bootloader_enabled | default(true)
+  tags: [os, hardening, bootloader]
+
+- name: "OS | Phase 2 | Benutzer & Gruppen"
+  ansible.builtin.include_tasks: users.yml
+  tags: [os, hardening, users]
+
+- name: "OS | Phase 3 | Kernel & sysctl"
+  ansible.builtin.include_tasks: kernel.yml
+  tags: [os, hardening, kernel, sysctl]
+
+- name: "OS | Phase 4 | Kernel-Module deaktivieren"
+  ansible.builtin.include_tasks: modules.yml
+  tags: [os, hardening, modules]
+
+- name: "OS | Phase 4b | AppArmor / MAC"
+  ansible.builtin.include_tasks: apparmor.yml
+  when: apparmor_enabled | default(true)
+  tags: [os, hardening, apparmor, mac]
+
+- name: "OS | Phase 5 | Dateisystem & Mount"
+  ansible.builtin.include_tasks: filesystem.yml
+  tags: [os, hardening, filesystem]
+
+- name: "OS | Phase 5b | AIDE Filesystem Integrity Monitoring"
+  ansible.builtin.include_tasks: aide.yml
+  when: aide_enabled | default(true)
+  tags: [os, hardening, aide]
+
+- name: "OS | Phase 5c | Remote-Logging (rsyslog + journald)"
+  ansible.builtin.include_tasks: logging.yml
+  tags: [os, hardening, logging, syslog]
+
+- name: "OS | Phase 6 | PAM"
+  ansible.builtin.include_tasks: pam.yml
+  tags: [os, hardening, pam]
+
+- name: "OS | Phase 6b | Sudo-Härtung"
+  ansible.builtin.include_tasks: sudo.yml
+  tags: [os, hardening, sudo]
+
+- name: "OS | Phase 6c | Shell-Härtung (Timeout, PATH, Legacy-Dateien)"
+  ansible.builtin.include_tasks: shell_hardening.yml
+  tags: [os, hardening, shell]
+
+- name: "OS | Phase 6d | Cron-Zugriffskontrolle (Whitelist)"
+  ansible.builtin.include_tasks: cron_hardening.yml
+  tags: [os, hardening, cron]
+
+- name: "OS | Phase 6e | systemd Service-Sandboxing"
+  ansible.builtin.include_tasks: systemd_hardening.yml
+  when: ansible_service_mgr == 'systemd'
+  tags: [os, hardening, systemd]
+
+- name: "OS | Phase 7 | Auditd"
+  ansible.builtin.include_tasks: auditd.yml
+  tags: [os, hardening, auditd]
+
+- name: "OS | Phase 8 | Fail2ban"
+  ansible.builtin.include_tasks: fail2ban.yml
+  tags: [os, hardening, fail2ban]
+
+- name: "OS | Phase 9 | NTP & Timezone"
+  ansible.builtin.include_tasks: time.yml
+  tags: [os, hardening, ntp, time]
+
+- name: "OS | Phase 10 | Unattended Upgrades"
+  ansible.builtin.include_tasks: upgrades.yml
+  tags: [os, hardening, upgrades]
+
+- name: "OS | Phase 11 | MOTD"
+  ansible.builtin.include_tasks: motd.yml
+  tags: [os, hardening, motd]
+
+- name: "OS | Phase 11b | Lynis Hardening-Audit"
+  ansible.builtin.include_tasks: lynis_audit.yml
+  when: lynis_enabled | default(true)
+  tags: [os, hardening, lynis, audit]
+
+- name: "OS | Phase 12 | Compliance-Report"
+  ansible.builtin.include_tasks: audit.yml
+  when: os_audit_enabled | default(true)
+  tags: [os, hardening, audit]
+
+- name: "✅ OS Hardening | Zusammenfassung"
+  ansible.builtin.debug:
+    msg:
+      - "======================================================="
+      - "  OS HARDENING ABGESCHLOSSEN: {{ inventory_hostname }}"
+      - "======================================================="
+      - "  OS:              {{ ansible_distribution }} {{ ansible_distribution_version }}"
+      - "  Kernel:          {{ ansible_kernel }}"
+      - "  Timezone:        {{ os_timezone }}"
+      - "  Auditd:          {{ os_auditd_enabled }}"
+      - "  Fail2ban:        {{ os_fail2ban_enabled }}"
+      - "  Auto-Updates:    {{ os_unattended_upgrades }}"
+      - "  sudo Timeout:    {{ os_sudo_timeout }} min"
+      - "  AIDE:            {{ aide_enabled }} (täglich {{ aide_cron_hour }}:{{ aide_cron_minute }} Uhr)"
+      - "  AIDE DB:         {{ aide_db_dir }}/aide.db.gz"
+      - "  AIDE Logs:       {{ aide_log_dir }}/"
+      - "  Remote-Syslog:   {{ syslog_remote_host | default('(nicht konfiguriert)') }}:{{ syslog_remote_port }} ({{ syslog_remote_protocol | upper }})"
+      - "  journald:        persistent, ForwardToSyslog={{ syslog_journald_forward_to_syslog }}"
+      - "  Shell TMOUT:     {{ shell_tmout_seconds }}s"
+      - "  Cron Whitelist:  root{{ ', ' + cron_allow_users | join(', ') if cron_allow_users | length > 0 else '' }}"
+      - "  systemd gehärtet:{{ systemd_harden_services | length }} Dienste"
+      - "  Lynis:           {{ 'aktiviert (Min. ' + lynis_score_minimum | string + '/100)' if lynis_enabled else 'deaktiviert' }}"
+      - "  AppArmor:        {{ 'enforce' if apparmor_enabled else 'deaktiviert' }}"
+      - "  Bootloader:      {{ 'gehärtet' if bootloader_enabled else 'deaktiviert' }}"
+      - "  FS-Scan Report:  ../../reports/{{ inventory_hostname }}_filesystem_scan_*.txt"
+      - "  OS-Report:       ../../reports/{{ inventory_hostname }}_os_report_*.txt"
+      - "======================================================="
+  tags: [os, hardening, summary]

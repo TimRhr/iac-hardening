@@ -1,0 +1,272 @@
+---
+# =============================================================================
+# OS Hardening | AIDE — Advanced Intrusion Detection Environment
+# BSI SYS.1.3.A9 / SYS.1.1.A15 · CIS Benchmark 6.1
+#
+# Ablauf:
+#   1. Paket sicherstellen
+#   2. Konfiguration deployen
+#   3. DB-Verzeichnis + Permissions
+#   4. Initiale Datenbank erstellen (async, dauert mehrere Minuten)
+#   5. DB nach /var/lib/aide/aide.db.gz verschieben
+#   6. Cronjob für täglichen Check
+#   7. Alert-Skript deployen (Mail + Syslog + optionaler Webhook)
+#   8. Letzten Check-Timestamp validieren
+# =============================================================================
+
+# ── 1. Installation ───────────────────────────────────────────────────────────
+
+- name: "AIDE | Paket installieren (Debian/Ubuntu)"
+  ansible.builtin.apt:
+    name: aide
+    state: present
+    update_cache: false
+  when: ansible_os_family == 'Debian'
+  tags: [os, aide, packages]
+
+- name: "AIDE | Paket installieren (RHEL/Rocky)"
+  ansible.builtin.dnf:
+    name: aide
+    state: present
+  when: ansible_os_family == 'RedHat'
+  tags: [os, aide, packages]
+
+# ── 2. Konfiguration ──────────────────────────────────────────────────────────
+
+- name: "AIDE | Backup der originalen Konfiguration"
+  ansible.builtin.copy:
+    src: /etc/aide/aide.conf
+    dest: /etc/aide/aide.conf.orig
+    remote_src: true
+    force: false
+    mode: "0600"
+  failed_when: false
+  tags: [os, aide, config]
+
+- name: "AIDE | Gehärtete Konfiguration deployen"
+  ansible.builtin.template:
+    src: aide.conf.j2
+    dest: /etc/aide/aide.conf
+    owner: root
+    group: root
+    mode: "0600"
+    validate: "aide --config=%s --version"
+  tags: [os, aide, config]
+
+# ── 3. Verzeichnisse & Berechtigungen ─────────────────────────────────────────
+
+- name: "AIDE | DB-Verzeichnis anlegen"
+  ansible.builtin.file:
+    path: "{{ aide_db_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  tags: [os, aide, config]
+
+- name: "AIDE | Log-Verzeichnis anlegen"
+  ansible.builtin.file:
+    path: "{{ aide_log_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  tags: [os, aide, config]
+
+- name: "AIDE | Skript-Verzeichnis anlegen"
+  ansible.builtin.file:
+    path: /usr/local/lib/aide
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  tags: [os, aide, config]
+
+# ── 4. Alert-Skript deployen ──────────────────────────────────────────────────
+
+- name: "AIDE | Alert-Skript deployen"
+  ansible.builtin.template:
+    src: aide-alert.sh.j2
+    dest: /usr/local/lib/aide/aide-alert.sh
+    owner: root
+    group: root
+    mode: "0750"
+  tags: [os, aide, alert]
+
+- name: "AIDE | Wrapper-Skript für Cronjob deployen"
+  ansible.builtin.template:
+    src: aide-check.sh.j2
+    dest: /usr/local/lib/aide/aide-check.sh
+    owner: root
+    group: root
+    mode: "0750"
+  tags: [os, aide, cron]
+
+# ── 5. Initiale Datenbank erstellen ───────────────────────────────────────────
+
+- name: "AIDE | Prüfe ob Datenbank bereits existiert"
+  ansible.builtin.stat:
+    path: "{{ aide_db_dir }}/aide.db.gz"
+  register: aide_db_stat
+  tags: [os, aide, init]
+
+- name: "AIDE | Initiale Datenbank erstellen (async — kann mehrere Minuten dauern)"
+  ansible.builtin.command:
+    cmd: >
+      aide --config=/etc/aide/aide.conf --init
+      --verbose={{ aide_init_verbose | default(0) }}
+  async: "{{ aide_init_timeout }}"
+  poll: 30
+  register: aide_init_result
+  when: not aide_db_stat.stat.exists or aide_reinit | default(false)
+  tags: [os, aide, init]
+
+- name: "AIDE | Neue Datenbank als aktive DB aktivieren (Debian/Ubuntu)"
+  ansible.builtin.shell: |
+    set -e
+    NEW_DB="{{ aide_db_dir }}/aide.db.new.gz"
+    ACTIVE_DB="{{ aide_db_dir }}/aide.db.gz"
+    if [ -f "$NEW_DB" ]; then
+      # Backup der alten DB falls vorhanden
+      [ -f "$ACTIVE_DB" ] && cp "$ACTIVE_DB" "${ACTIVE_DB}.$(date +%Y%m%d_%H%M%S)"
+      mv "$NEW_DB" "$ACTIVE_DB"
+      chmod 600 "$ACTIVE_DB"
+      echo "DB aktiviert: $ACTIVE_DB"
+    else
+      echo "Keine neue DB gefunden unter $NEW_DB"
+      exit 1
+    fi
+  args:
+    executable: /bin/bash
+  register: aide_db_activate
+  when:
+    - not aide_db_stat.stat.exists or aide_reinit | default(false)
+    - aide_init_result is not skipped
+  tags: [os, aide, init]
+
+- name: "AIDE | Initialisierungs-Ergebnis"
+  ansible.builtin.debug:
+    msg:
+      - "AIDE DB initialisiert: {{ aide_db_activate.stdout | default('bereits vorhanden') }}"
+      - "DB-Pfad: {{ aide_db_dir }}/aide.db.gz"
+  tags: [os, aide, init]
+
+# ── 6. DB-Integrität sichern ──────────────────────────────────────────────────
+
+- name: "AIDE | DB-Datei gegen Manipulation schützen (immutable)"
+  ansible.builtin.file:
+    path: "{{ aide_db_dir }}/aide.db.gz"
+    owner: root
+    group: root
+    mode: "0400"
+  failed_when: false
+  tags: [os, aide, permissions]
+
+- name: "AIDE | Konfigurationsdatei gegen Manipulation schützen"
+  ansible.builtin.file:
+    path: /etc/aide/aide.conf
+    owner: root
+    group: root
+    mode: "0600"
+  tags: [os, aide, permissions]
+
+# ── 7. Cronjob ────────────────────────────────────────────────────────────────
+
+- name: "AIDE | Täglicher Check-Cronjob"
+  ansible.builtin.cron:
+    name: "AIDE daily integrity check"
+    user: root
+    hour: "{{ aide_cron_hour }}"
+    minute: "{{ aide_cron_minute }}"
+    weekday: "*"
+    job: "/usr/local/lib/aide/aide-check.sh >> {{ aide_log_dir }}/aide-cron.log 2>&1"
+    state: present
+  tags: [os, aide, cron]
+
+- name: "AIDE | Wöchentlicher DB-Update-Cronjob"
+  ansible.builtin.cron:
+    name: "AIDE weekly database update"
+    user: root
+    hour: "{{ aide_db_update_hour }}"
+    minute: "{{ aide_db_update_minute }}"
+    weekday: "{{ aide_db_update_weekday }}"
+    job: "/usr/local/lib/aide/aide-check.sh --update >> {{ aide_log_dir }}/aide-update.log 2>&1"
+    state: "{{ 'present' if aide_auto_update else 'absent' }}"
+  tags: [os, aide, cron]
+
+# ── 8. Logrotate ──────────────────────────────────────────────────────────────
+
+- name: "AIDE | Logrotate-Konfiguration"
+  ansible.builtin.copy:
+    content: |
+      {{ aide_log_dir }}/aide*.log {
+          weekly
+          rotate 52
+          compress
+          delaycompress
+          missingok
+          notifempty
+          create 0640 root root
+      }
+    dest: /etc/logrotate.d/aide
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [os, aide, logrotate]
+
+# ── 9. Erster manueller Check (nur wenn DB neu erstellt) ─────────────────────
+
+- name: "AIDE | Ersten Integritäts-Check ausführen (Validierung)"
+  ansible.builtin.command:
+    cmd: aide --config=/etc/aide/aide.conf --check
+  register: aide_first_check
+  failed_when: aide_first_check.rc > 7   # rc=0 ok, rc<8 nur Warnungen, rc>=8 Fehler
+  changed_when: false
+  when: not aide_db_stat.stat.exists or aide_reinit | default(false)
+  tags: [os, aide, verify]
+
+- name: "AIDE | Check-Ergebnis interpretieren"
+  ansible.builtin.debug:
+    msg: >-
+      AIDE Check RC={{ aide_first_check.rc | default('übersprungen') }} —
+      {% if aide_first_check.rc is defined %}
+        {% if aide_first_check.rc == 0 %}Keine Änderungen gefunden.
+        {% elif aide_first_check.rc < 8 %}Änderungen/Warnungen vorhanden — RC={{ aide_first_check.rc }}.
+        {% else %}FEHLER — RC={{ aide_first_check.rc }}. Bitte Ausgabe prüfen!
+        {% endif %}
+      {% else %}Check wurde übersprungen (DB war bereits vorhanden).
+      {% endif %}
+  tags: [os, aide, verify]
+
+# ── 10. Auditd-Regeln für AIDE-Dateien ergänzen ───────────────────────────────
+
+- name: "AIDE | Auditd-Regel für AIDE-Datenbank"
+  ansible.builtin.lineinfile:
+    path: /etc/audit/rules.d/99-hardening.rules
+    line: "{{ item }}"
+    state: present
+  loop:
+    - "# AIDE — Datenbankschutz (BSI SYS.1.3.A9)"
+    - "-w {{ aide_db_dir }}/aide.db.gz -p wa -k aide-db"
+    - "-w /etc/aide/aide.conf -p wa -k aide-config"
+    - "-w /usr/local/lib/aide -p wa -k aide-scripts"
+  notify: Reload audit rules
+  tags: [os, aide, auditd]
+
+# ── 11. Zusammenfassung ───────────────────────────────────────────────────────
+
+- name: "AIDE | Zusammenfassung"
+  ansible.builtin.debug:
+    msg:
+      - "============================================="
+      - "  AIDE Filesystem Integrity Monitoring"
+      - "============================================="
+      - "  Konfiguration:  /etc/aide/aide.conf"
+      - "  Datenbank:      {{ aide_db_dir }}/aide.db.gz"
+      - "  Logs:           {{ aide_log_dir }}/"
+      - "  Täglicher Check: {{ aide_cron_hour }}:{{ aide_cron_minute }} Uhr"
+      - "  Auto-Update:    {{ aide_auto_update }}"
+      - "  Alert-Mail:     {{ aide_alert_mail | default('(nicht konfiguriert)') }}"
+      - "  Webhook:        {{ 'aktiv' if aide_webhook_url | default('') != '' else '(nicht konfiguriert)' }}"
+      - "============================================="
+  tags: [os, aide, summary]

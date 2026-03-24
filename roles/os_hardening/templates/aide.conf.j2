@@ -1,0 +1,178 @@
+## =============================================================================
+## /etc/aide/aide.conf
+## Generiert von Ansible OS Hardening Role
+## BSI SYS.1.3.A9 · CIS Benchmark 6.1
+## WARNUNG: Wird bei Ansible-Run überschrieben!
+## =============================================================================
+
+## ── Datenbank-Pfade ──────────────────────────────────────────────────────────
+database_in=file:{{ aide_db_dir }}/aide.db.gz
+database_out=file:{{ aide_db_dir }}/aide.db.new.gz
+
+## ── Report-Konfiguration ─────────────────────────────────────────────────────
+report_url=file:{{ aide_log_dir }}/aide-report-@@{hostname}-@@{time}.log
+report_url=stdout
+
+## Log-Level: 0=minimal, 1=normal, 2=verbose
+verbose={{ aide_report_verbose | default(5) }}
+
+## Zeige hinzugefügte, entfernte und geänderte Dateien
+report_force_attrs=0
+
+## ── Prüfattribute-Gruppen (Bitmask-Definitionen) ─────────────────────────────
+## Basis-Prüfung: Permissions, Inode, User, Group, Dateityp
+PERMS = p+i+u+g+ftype
+
+## Standard: Permissions + Hash + Größe + Mtime
+BASE = p+i+u+g+s+m+sha256+ftype
+
+## Vollständige Prüfung: alles inklusive Content-Hash
+FULL = p+i+u+g+s+m+c+sha256+sha512+acl+xattrs+ftype
+
+## Nur Inhalt (für Dateien die sich häufig ändern dürfen, aber Inhalt nicht)
+CONTENT = sha256+ftype
+
+## Log-Dateien: nur Größenwachstum prüfen, kein Hash (ändern sich ständig)
+LOGCHECK = p+i+u+g+ftype
+
+## Binär-Dateien: maximale Prüfung
+BINARY = p+i+u+g+s+m+sha256+sha512+ftype
+
+{% if aide_extra_groups | default([]) | length > 0 %}
+## Benutzerdefinierte Gruppen
+{% for grp in aide_extra_groups %}
+{{ grp.name }} = {{ grp.attrs }}
+{% endfor %}
+{% endif %}
+
+## ── Überwachte Pfade — BSI/CIS Pflicht ──────────────────────────────────────
+
+## Kernel & Boot
+/boot                           FULL
+/proc/sys                       LOGCHECK
+
+## Systembinaries — Manipulationen sind kritisch (CIS 6.1)
+/bin                            BINARY
+/sbin                           BINARY
+/usr/bin                        BINARY
+/usr/sbin                       BINARY
+/usr/local/bin                  BINARY
+/usr/local/sbin                 BINARY
+/lib                            BINARY
+/lib64                          BINARY
+/usr/lib                        BINARY
+/usr/lib64                      BINARY
+
+## Systemkonfiguration — BSI SYS.1.3: alle Konfigurationsdateien überwachen
+/etc                            FULL
+!/etc/mtab
+!/etc/exports
+!/etc/adjtime
+
+## PAM — Manipulationen ermöglichen Privilege Escalation
+/etc/pam.d                      FULL
+/lib/security                   BINARY
+/lib64/security                 BINARY
+
+## SSH — BSI SYS.1.3.A4: Schlüssel und Konfiguration absichern
+/etc/ssh                        FULL
+
+## sudo — jede Änderung ist sicherheitsrelevant
+/etc/sudoers                    FULL
+/etc/sudoers.d                  FULL
+
+## Cron — muss gegen Manipulation gesichert sein
+/etc/crontab                    FULL
+/etc/cron.d                     FULL
+/etc/cron.daily                 FULL
+/etc/cron.hourly                FULL
+/etc/cron.monthly               FULL
+/etc/cron.weekly                FULL
+/var/spool/cron/crontabs        FULL
+
+## Benutzer & Gruppen
+/etc/passwd                     FULL
+/etc/shadow                     FULL
+/etc/group                      FULL
+/etc/gshadow                    FULL
+/etc/security                   FULL
+
+## Systemd-Units (könnten Backdoors enthalten)
+/etc/systemd/system             FULL
+/usr/lib/systemd/system         BINARY
+/lib/systemd                    BINARY
+
+## Kernel-Module — BSI SYS.1.3: Kernelintegrität sicherstellen
+/etc/modprobe.d                 FULL
+/etc/modules-load.d             FULL
+/usr/lib/modules                BINARY
+
+## Netzwerkkonfiguration
+/etc/hosts                      FULL
+/etc/resolv.conf                FULL
+/etc/network                    FULL
+/etc/netplan                    FULL
+/etc/NetworkManager             FULL
+
+## PKI & Zertifikate
+/etc/ssl/certs                  FULL
+/etc/ssl/private                FULL
+/usr/share/ca-certificates      BINARY
+
+## Login-Konfiguration
+/etc/login.defs                 FULL
+/etc/profile                    FULL
+/etc/profile.d                  FULL
+/etc/environment                FULL
+/etc/bash.bashrc                FULL
+/etc/shells                     FULL
+
+## AIDE selbst — Schutz vor Manipulation des IDS
+/etc/aide                       FULL
+{{ aide_db_dir }}               FULL
+/usr/local/lib/aide             FULL
+
+## Auditd
+/etc/audit                      FULL
+
+## Sysctl — Kernel-Parameter-Manipulation erkennen
+/etc/sysctl.conf                FULL
+/etc/sysctl.d                   FULL
+
+{% if aide_monitor_home | default(true) %}
+## Home-Verzeichnisse (nur Berechtigungen, kein Content-Hash — zu groß)
+/root                           FULL
+/home                           PERMS
+!/home/.*                       # Dotfiles in home ausschließen
+{% endif %}
+
+{% if aide_extra_paths | default([]) | length > 0 %}
+## Benutzerdefinierte Pfade
+{% for path in aide_extra_paths %}
+{{ path.path }}{% if path.exclude | default(false) %}!{% endif %} {{ path.rule }}
+{% endfor %}
+{% endif %}
+
+## ── Ausschlüsse ──────────────────────────────────────────────────────────────
+## Verzeichnisse die sich legitim häufig ändern
+!/etc/ld.so.cache
+!/etc/cron.d/aide
+!/etc/mtab
+!/etc/fstab.d
+!/proc
+!/sys
+!/dev
+!/run
+!/tmp
+!/var/run
+!/var/tmp
+!/var/cache
+!/var/lib/dpkg
+!/var/lib/apt
+!/var/log
+!/var/spool/mail
+!/home/.*/.bash_history
+!/home/.*/.viminfo
+!/home/.*/.lesshst
+!/root/.bash_history
+!/root/.viminfo

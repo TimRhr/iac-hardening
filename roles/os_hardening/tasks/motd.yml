@@ -1,0 +1,54 @@
+---
+# =============================================================================
+# OS Hardening | MOTD & Login-Banner
+# =============================================================================
+
+- name: "MOTD | Dynamische MOTD-Skripte deaktivieren"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    mode: "0644"
+    state: touch
+  loop:
+    - /etc/motd
+  when: os_motd_enabled | default(true)
+  tags: [os, motd]
+
+- name: "MOTD | Dynamische Update-Notifier deaktivieren"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    mode: "a-x"
+  loop:
+    - /etc/update-motd.d/10-help-text
+    - /etc/update-motd.d/50-motd-news
+    - /etc/update-motd.d/80-livepatch
+    - /etc/update-motd.d/91-release-upgrade
+  failed_when: false
+  tags: [os, motd]
+
+- name: "MOTD | Eigene MOTD setzen"
+  ansible.builtin.copy:
+    content: "{{ os_motd_text }}"
+    dest: /etc/motd
+    owner: root
+    group: root
+    mode: "0644"
+  when: os_motd_enabled | default(true)
+  tags: [os, motd]
+
+- name: "MOTD | /etc/issue (lokale Konsole) setzen"
+  ansible.builtin.copy:
+    content: "Authorized access only. All activity is monitored.\n"
+    dest: /etc/issue
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [os, motd]
+
+- name: "MOTD | /etc/issue.net (Netzwerk-Banner) setzen"
+  ansible.builtin.copy:
+    content: "Authorized access only. All activity is monitored.\n"
+    dest: /etc/issue.net
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [os, motd]

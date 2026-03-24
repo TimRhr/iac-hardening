@@ -1,0 +1,19 @@
+# =============================================================================
+# /etc/security/faillock.conf
+# Generiert von Ansible OS Hardening Role
+# =============================================================================
+
+# Zeitfenster für fehlgeschlagene Versuche (Sekunden)
+find_time = {{ os_pam_faillock_findtime }}
+
+# Anzahl Fehlversuche bis Account gesperrt wird
+deny = {{ os_pam_faillock_deny }}
+
+# Sperrdauer in Sekunden (0 = permanent bis manuelles unlock)
+unlock_time = {{ os_pam_faillock_unlock_time }}
+
+# Auch root sperren
+even_deny_root
+
+# Fehlversuche pro Quell-IP zählen (nicht nur pro User)
+audit

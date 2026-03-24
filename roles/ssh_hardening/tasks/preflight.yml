@@ -1,0 +1,80 @@
+---
+# =============================================================================
+# SSH Hardening | Task-Datei: Pre-Flight Checks
+# Prüft Voraussetzungen BEVOR die Härtung beginnt, damit kein Lock-out passiert.
+# =============================================================================
+
+- name: "Pre-Flight | Prüfe ob SSH-Key für Deploy-User existiert"
+  ansible.builtin.stat:
+    path: "{{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519.pub"
+  register: preflight_key_stat
+  delegate_to: localhost
+  become: false
+  tags: [ssh, preflight]
+
+- name: "Pre-Flight | ABBRUCH - Kein SSH-Key gefunden, aber Passwort-Auth wird deaktiviert!"
+  ansible.builtin.fail:
+    msg: |
+      ⛔ SICHERHEITS-STOPP für {{ inventory_hostname }}:
+      Passwort-Authentifizierung soll deaktiviert werden (ssh_password_authentication=no),
+      aber kein SSH-Key wurde unter
+        {{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519.pub
+      gefunden.
+      Führe zuerst den Tag 'keygen' aus:
+        ansible-playbook hardening.yml --tags keygen --limit {{ inventory_hostname }}
+  when:
+    - ssh_password_authentication == "no"
+    - not preflight_key_stat.stat.exists
+  tags: [ssh, preflight]
+
+- name: "Pre-Flight | Prüfe aktuellen SSH-Port (Erreichbarkeit)"
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: "{{ ssh_port }}"
+    timeout: 10
+    state: started
+  delegate_to: localhost
+  become: false
+  ignore_errors: true
+  register: preflight_port_check
+  tags: [ssh, preflight]
+
+- name: "Pre-Flight | Prüfe ob Root-Partition voll ist (> 90%)"
+  ansible.builtin.shell: |
+    df / | awk 'NR==2 {gsub("%",""); if ($5 > 90) exit 1}'
+  args:
+    executable: /bin/bash
+  changed_when: false
+  failed_when: false
+  register: preflight_disk
+  tags: [ssh, preflight]
+
+- name: "Pre-Flight | WARNUNG - Root-Partition fast voll!"
+  ansible.builtin.debug:
+    msg: "⚠️  WARNUNG: Root-Partition auf {{ inventory_hostname }} ist über 90% belegt!"
+  when: preflight_disk.rc != 0
+  tags: [ssh, preflight]
+
+- name: "Pre-Flight | Prüfe OpenSSH Version"
+  ansible.builtin.command: ssh -V
+  register: preflight_ssh_version
+  changed_when: false
+  failed_when: false
+  tags: [ssh, preflight]
+
+- name: "Pre-Flight | Zeige SSH-Version"
+  ansible.builtin.debug:
+    msg: "ℹ️  SSH-Version auf {{ inventory_hostname }}: {{ preflight_ssh_version.stderr }}"
+  tags: [ssh, preflight]
+
+- name: "Pre-Flight | Registriere aktuellen Firewall-Status"
+  ansible.builtin.command: "{{ 'ufw status' if ansible_os_family == 'Debian' else 'firewall-cmd --list-all' }}"
+  changed_when: false
+  failed_when: false
+  register: preflight_fw_status
+  tags: [ssh, preflight]
+
+- name: "Pre-Flight | Alle Checks bestanden"
+  ansible.builtin.debug:
+    msg: "✅ Pre-Flight Checks für {{ inventory_hostname }} bestanden - Härtung startet"
+  tags: [ssh, preflight]

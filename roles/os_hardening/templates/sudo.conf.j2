@@ -1,0 +1,11 @@
+# =============================================================================
+# /etc/sudo.conf
+# Generiert von Ansible OS Hardening Role
+# =============================================================================
+
+# Plugin-Konfiguration (Standard)
+Plugin sudoers_policy sudoers.so
+Plugin sudoers_io     sudoers.so
+
+# Sudo-Pfad absichern
+Path askpass /usr/bin/ssh-askpass

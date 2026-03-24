@@ -1,0 +1,52 @@
+# =============================================================================
+# /etc/sudoers.d/99-hardening
+# Generiert von Ansible OS Hardening Role
+# WARNUNG: Wird bei jedem Ansible-Run überschrieben
+# =============================================================================
+
+# ── Umgebungs-Variablen bereinigen (verhindert Privilege Escalation) ──────────
+Defaults      env_reset
+Defaults      env_delete += "CDPATH GLOBIGNORE BASH_ENV ENV TERMINFO TERMINFO_DIRS TERMPATH"
+Defaults      env_keep   =  "LANG LANGUAGE LINGUAS LC_* _XKB_CHARSET XAPPLRESDIR XFILESEARCHPATH XUSERFILESEARCHPATH"
+
+# ── Sicherheits-Defaults ──────────────────────────────────────────────────────
+# Timestamp pro TTY — verhindert Token-Hijacking über andere Terminals
+Defaults      timestamp_type=tty
+
+# Sudo-Sitzung nach {{ os_sudo_timeout }} Minuten Inaktivität ablaufen lassen
+Defaults      timestamp_timeout={{ os_sudo_timeout }}
+
+# Passwortversuche begrenzen
+Defaults      passwd_tries={{ os_sudo_passwd_tries }}
+
+# Umgebungs-PATH explizit setzen (kein PATH-Hijacking)
+Defaults      secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# sudo-Befehle loggen (in Ergänzung zu syslog)
+Defaults      log_host, log_year
+Defaults      logfile="{{ os_sudo_log_dir }}/sudo.log"
+Defaults      loglinelen=0
+
+# Bei unbekanntem Terminal kein sudo
+Defaults      requiretty
+
+# sudo-Warnung bei erstem Mal unterdrücken (Lecture deaktivieren)
+Defaults      lecture=never
+
+# ── Root-Direktzugang via sudo deaktivieren ───────────────────────────────────
+# root darf sudo nicht nutzen (unnötige Direktzugänge vermeiden)
+Defaults:root !sudoers_check
+
+{% if os_sudo_allow_groups | length > 0 %}
+# ── Erlaubte Gruppen ──────────────────────────────────────────────────────────
+{% for group in os_sudo_allow_groups %}
+%{{ group }} ALL=(ALL:ALL) ALL
+{% endfor %}
+{% endif %}
+
+{% if os_sudo_nopasswd_commands | length > 0 %}
+# ── NOPASSWD-Kommandos (explizit freigegeben) ─────────────────────────────────
+{% for entry in os_sudo_nopasswd_commands %}
+{{ entry.user }} ALL=(ALL) NOPASSWD: {{ entry.commands | join(', ') }}
+{% endfor %}
+{% endif %}

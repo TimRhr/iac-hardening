@@ -1,0 +1,64 @@
+# =============================================================================
+# /etc/apparmor.d/usr.sbin.rsyslogd
+# AppArmor-Profil für rsyslog
+# Generiert von Ansible OS Hardening Role
+# =============================================================================
+
+#include <tunables/global>
+
+/usr/sbin/rsyslogd {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+
+  capability net_bind_service,
+  capability sys_nice,
+  capability syslog,
+  capability dac_override,
+  capability dac_read_search,
+
+  network inet dgram,
+  network inet stream,
+  network inet6 dgram,
+  network inet6 stream,
+  network unix dgram,
+  network unix stream,
+
+  /usr/sbin/rsyslogd mr,
+  /usr/lib{,32,64}/** mr,
+  /lib{,32,64}/** mr,
+
+  # Konfiguration
+  /etc/rsyslog.conf r,
+  /etc/rsyslog.d/ r,
+  /etc/rsyslog.d/** r,
+
+  # Systemdateien
+  /etc/localtime r,
+  /etc/hosts r,
+  /etc/nsswitch.conf r,
+
+  # Log-Verzeichnisse schreiben
+  /var/log/ r,
+  /var/log/** rw,
+  /var/log/remote/ rw,
+  /var/log/remote/** rw,
+
+  # TLS-Zertifikate
+  /etc/rsyslog.d/tls/ r,
+  /etc/rsyslog.d/tls/** r,
+
+  # Spool
+  /var/spool/rsyslog/ rw,
+  /var/spool/rsyslog/** rw,
+
+  # Sockets
+  /run/rsyslogd.pid rw,
+  /run/syslog rw,
+  /dev/log rw,
+
+  # Proc
+  /proc/sys/kernel/pid_max r,
+  /proc/*/status r,
+
+  #include <local/usr.sbin.rsyslogd>
+}

@@ -1,0 +1,134 @@
+---
+# =============================================================================
+# OS Hardening | Benutzer, Gruppen, Passwortrichtlinien
+# =============================================================================
+
+- name: "Benutzer | Root-Passwort sperren (nur sudo erlaubt)"
+  ansible.builtin.user:
+    name: root
+    password_lock: true
+  when: os_root_password_lock | default(true)
+  tags: [os, users]
+
+- name: "Benutzer | umask in /etc/profile setzen"
+  ansible.builtin.lineinfile:
+    path: /etc/profile
+    regexp: '^umask'
+    line: "umask {{ os_umask_default }}"
+    state: present
+  tags: [os, users]
+
+- name: "Benutzer | umask in /etc/bash.bashrc setzen (interaktive Shells)"
+  ansible.builtin.lineinfile:
+    path: /etc/bash.bashrc
+    regexp: '^umask'
+    line: "umask {{ os_umask_default }}"
+    state: present
+  when: ansible_os_family == 'Debian'
+  tags: [os, users]
+
+- name: "Benutzer | umask in /etc/login.defs setzen"
+  ansible.builtin.lineinfile:
+    path: /etc/login.defs
+    regexp: '^UMASK'
+    line: "UMASK\t\t{{ os_umask_default }}"
+    state: present
+  tags: [os, users]
+
+- name: "Benutzer | umask systemweit via /etc/profile.d/hardening-umask.sh"
+  ansible.builtin.copy:
+    content: |
+      # Ansible OS Hardening — restriktive umask
+      umask {{ os_umask_default }}
+    dest: /etc/profile.d/hardening-umask.sh
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [os, users]
+
+- name: "Benutzer | Passwort-Ablauf konfigurieren (login.defs)"
+  ansible.builtin.lineinfile:
+    path: /etc/login.defs
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    state: present
+  loop:
+    - { regexp: '^PASS_MAX_DAYS', line: "PASS_MAX_DAYS\t{{ os_password_max_days }}" }
+    - { regexp: '^PASS_MIN_DAYS', line: "PASS_MIN_DAYS\t{{ os_password_min_days }}" }
+    - { regexp: '^PASS_WARN_AGE', line: "PASS_WARN_AGE\t{{ os_password_warn_age }}" }
+    - { regexp: '^INACTIVE',      line: "INACTIVE\t{{ os_inactive_lock_days }}" }
+  tags: [os, users]
+
+- name: "Benutzer | System-Accounts sperren"
+  ansible.builtin.user:
+    name: "{{ item }}"
+    shell: /sbin/nologin
+    password_lock: true
+  loop: "{{ os_system_accounts_lock }}"
+  failed_when: false
+  tags: [os, users]
+
+- name: "Benutzer | Prüfe auf leere Passwörter"
+  ansible.builtin.shell: |
+    awk -F: '($2 == "" ) { print $1 }' /etc/shadow
+  args:
+    executable: /bin/bash
+  args:
+    executable: /bin/bash
+  register: empty_passwords
+  changed_when: false
+  failed_when: false
+  tags: [os, users, audit]
+
+- name: "Benutzer | WARNUNG — Accounts mit leerem Passwort"
+  ansible.builtin.debug:
+    msg: "⚠️  Accounts mit leerem Passwort: {{ empty_passwords.stdout_lines }}"
+  when: empty_passwords.stdout != ""
+  tags: [os, users, audit]
+
+- name: "Benutzer | Prüfe auf UID-0 Accounts außer root"
+  ansible.builtin.shell: |
+    awk -F: '($3 == 0 && $1 != "root") { print $1 }' /etc/passwd
+  args:
+    executable: /bin/bash
+  args:
+    executable: /bin/bash
+  register: uid0_accounts
+  changed_when: false
+  tags: [os, users, audit]
+
+- name: "Benutzer | WARNUNG — Zusätzliche UID-0 Accounts gefunden"
+  ansible.builtin.debug:
+    msg: "⚠️  UID-0 Accounts (außer root): {{ uid0_accounts.stdout_lines }}"
+  when: uid0_accounts.stdout != ""
+  tags: [os, users, audit]
+
+- name: "Benutzer | Sicherheitsrelevante Datei-Berechtigungen setzen"
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "/etc/passwd",  owner: root, group: root,   mode: "0644" }
+    - { path: "/etc/shadow",  owner: root, group: shadow, mode: "0640" }
+    - { path: "/etc/group",   owner: root, group: root,   mode: "0644" }
+    - { path: "/etc/gshadow", owner: root, group: shadow, mode: "0640" }
+    - { path: "/etc/crontab", owner: root, group: root,   mode: "0600" }
+  failed_when: false
+  tags: [os, users, permissions]
+
+- name: "Benutzer | /etc/cron.* Verzeichnisse absichern"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    owner: root
+    group: root
+    mode: "0700"
+  loop:
+    - /etc/cron.d
+    - /etc/cron.daily
+    - /etc/cron.hourly
+    - /etc/cron.monthly
+    - /etc/cron.weekly
+  failed_when: false
+  tags: [os, users, permissions]

@@ -1,0 +1,210 @@
+---
+# =============================================================================
+# OS Hardening | AppArmor — Mandatory Access Control
+# BSI SYS.1.3.A6 · CIS 1.3.1 / 1.3.2 / 1.3.3
+#
+# Ablauf:
+#   1. Pre-Flight: Kernel-Support prüfen
+#   2. AppArmor + utils installieren
+#   3. GRUB: apparmor=1 security=apparmor in Kernel-Cmdline
+#   4. AppArmor-Service aktivieren
+#   5. Eigene Härtungs-Profile deployen (SSH, rsyslog, cron, auditd)
+#   6. Alle Profile in enforce-Mode setzen
+#   7. Profilstatus prüfen + unconfined Prozesse reporten
+#   8. Auditd-Regeln für AppArmor-Events
+# =============================================================================
+
+# ── 1. Pre-Flight ──────────────────────────────────────────────────────────────
+
+- name: "AppArmor | Pre-Flight | Kernel-Unterstützung prüfen"
+  ansible.builtin.command: grep -c "apparmor" /boot/config-{{ ansible_kernel }}
+  register: apparmor_kernel_support
+  changed_when: false
+  failed_when: false
+  tags: [os, apparmor, preflight]
+
+- name: "AppArmor | Pre-Flight | securityfs prüfen"
+  ansible.builtin.stat:
+    path: /sys/kernel/security/apparmor
+  register: apparmor_securityfs
+  tags: [os, apparmor, preflight]
+
+- name: "AppArmor | Pre-Flight | WARNUNG wenn nicht im Kernel"
+  ansible.builtin.debug:
+    msg: >-
+      ⚠️  AppArmor im Kernel nicht gefunden.
+      Bitte Kernel mit CONFIG_SECURITY_APPARMOR=y kompilieren
+      oder ein Distributions-Kernel mit AppArmor-Support verwenden.
+  when: apparmor_kernel_support.stdout | default('0') | int == 0
+  tags: [os, apparmor, preflight]
+
+# ── 2. Pakete ─────────────────────────────────────────────────────────────────
+
+- name: "AppArmor | Pakete installieren (Debian/Ubuntu)"
+  ansible.builtin.apt:
+    name: "{{ apparmor_packages_debian }}"
+    state: present
+    update_cache: false
+  when: ansible_os_family == 'Debian'
+  tags: [os, apparmor, packages]
+
+- name: "AppArmor | Pakete installieren (RHEL/Rocky)"
+  ansible.builtin.dnf:
+    name: "{{ apparmor_packages_rhel }}"
+    state: present
+  when: ansible_os_family == 'RedHat'
+  tags: [os, apparmor, packages]
+
+# ── 3. Kernel-Parameter (GRUB) ────────────────────────────────────────────────
+# HINWEIS: AppArmor-Kernel-Parameter (apparmor=1 security=apparmor) werden
+# in bootloader.yml über grub-default.j2 gesetzt (Variable bootloader_extra_kernel_params).
+# Kein doppeltes Schreiben von GRUB_CMDLINE_LINUX hier — das würde den
+# bootloader.yml-Template-Deploy überschreiben und umgekehrt.
+
+- name: "AppArmor | GRUB-Parameter-Info"
+  ansible.builtin.debug:
+    msg: >-
+      AppArmor-Kernel-Parameter werden über bootloader.yml/grub-default.j2 gesetzt.
+      Sicherstellen dass bootloader_extra_kernel_params 'apparmor=1 security=apparmor' enthält.
+  when: apparmor_enabled | default(true)
+  tags: [os, apparmor, grub]
+
+# ── 4. AppArmor-Service ───────────────────────────────────────────────────────
+
+- name: "AppArmor | Service aktivieren und starten"
+  ansible.builtin.service:
+    name: apparmor
+    state: started
+    enabled: true
+  failed_when: false
+  tags: [os, apparmor, service]
+
+- name: "AppArmor | Aktuellen Status prüfen"
+  ansible.builtin.command: aa-status --json
+  register: apparmor_status_raw
+  changed_when: false
+  failed_when: false
+  tags: [os, apparmor, status]
+
+- name: "AppArmor | Status parsen"
+  ansible.builtin.set_fact:
+    apparmor_status: "{{ apparmor_status_raw.stdout | from_json }}"
+  when:
+    - apparmor_status_raw.rc == 0
+    - apparmor_status_raw.stdout != ''
+  failed_when: false
+  tags: [os, apparmor, status]
+
+# ── 5. Profile-Verzeichnis ────────────────────────────────────────────────────
+
+- name: "AppArmor | Lokales Profile-Verzeichnis anlegen"
+  ansible.builtin.file:
+    path: /etc/apparmor.d/local
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [os, apparmor, profiles]
+
+- name: "AppArmor | Abstractions-Verzeichnis sicherstellen"
+  ansible.builtin.file:
+    path: /etc/apparmor.d/abstractions
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [os, apparmor, profiles]
+
+# ── 6. Eigene Härtungs-Profile deployen ───────────────────────────────────────
+
+- name: "AppArmor | Eigene Profile deployen"
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ apparmor_custom_profiles }}"
+  register: apparmor_profiles_changed
+  tags: [os, apparmor, profiles]
+
+- name: "AppArmor | Profile neu laden (nach Deployment)"
+  ansible.builtin.command: "apparmor_parser -r {{ item.dest }}"
+  loop: "{{ apparmor_custom_profiles }}"
+  when: apparmor_profiles_changed is changed
+  failed_when: false
+  changed_when: true
+  tags: [os, apparmor, profiles]
+
+# ── 7. Alle Profile in enforce-Mode setzen ────────────────────────────────────
+
+- name: "AppArmor | Verteilte Profile in enforce-Mode setzen"
+  ansible.builtin.command: "aa-enforce {{ item }}"
+  loop: "{{ apparmor_enforce_profiles }}"
+  register: apparmor_enforce_result
+  changed_when: "'Setting' in (apparmor_enforce_result.results | map(attribute='stdout') | join(' '))"
+  failed_when: false
+  tags: [os, apparmor, enforce]
+
+- name: "AppArmor | Alle verfügbaren Profile laden (aa-enforce auf Verzeichnis)"
+  ansible.builtin.command: >-
+    aa-enforce /etc/apparmor.d/
+  when: apparmor_enforce_all | default(true)
+  changed_when: false
+  failed_when: false
+  tags: [os, apparmor, enforce]
+
+# ── 8. Unconfined Prozesse prüfen ─────────────────────────────────────────────
+
+- name: "AppArmor | Unconfined Prozesse ermitteln"
+  ansible.builtin.shell: |
+    aa-unconfined 2>/dev/null | grep -v "^$" || echo "keine unconfined Prozesse"
+  args:
+    executable: /bin/bash
+  register: apparmor_unconfined
+  changed_when: false
+  failed_when: false
+  tags: [os, apparmor, audit]
+
+- name: "AppArmor | Unconfined Prozesse anzeigen"
+  ansible.builtin.debug:
+    msg: "{{ apparmor_unconfined.stdout_lines }}"
+  tags: [os, apparmor, audit]
+
+- name: "AppArmor | Profile-Status anzeigen"
+  ansible.builtin.command: aa-status
+  register: apparmor_final_status
+  changed_when: false
+  failed_when: false
+  tags: [os, apparmor, audit]
+
+# ── 9. Auditd-Regeln für AppArmor-Events ─────────────────────────────────────
+
+- name: "AppArmor | Auditd-Regeln für MAC-Events"
+  ansible.builtin.lineinfile:
+    path: /etc/audit/rules.d/99-hardening.rules
+    line: "{{ item }}"
+    state: present
+  loop:
+    - "# AppArmor MAC (BSI SYS.1.3.A6 / CIS 1.3)"
+    - "-w /etc/apparmor -p wa -k MAC-policy"
+    - "-w /etc/apparmor.d -p wa -k MAC-policy"
+    - "-a always,exit -F arch=b64 -S ptrace -k apparmor-ptrace"
+  notify: Reload audit rules
+  tags: [os, apparmor, auditd]
+
+# ── 10. Zusammenfassung ───────────────────────────────────────────────────────
+
+- name: "AppArmor | Zusammenfassung"
+  ansible.builtin.debug:
+    msg:
+      - "============================================="
+      - "  AppArmor / MAC konfiguriert"
+      - "  BSI SYS.1.3.A6 · CIS 1.3"
+      - "============================================="
+      - "  Enforce-Profile: {{ apparmor_enforce_profiles | length }}"
+      - "  Eigene Profile:  {{ apparmor_custom_profiles | length }}"
+      - "  Enforce-All:     {{ apparmor_enforce_all | default(true) }}"
+      - "  Status:          {{ apparmor_final_status.stdout_lines[0] | default('unbekannt') }}"
+      - "============================================="
+  tags: [os, apparmor, summary]

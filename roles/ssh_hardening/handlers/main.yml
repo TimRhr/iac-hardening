@@ -1,0 +1,11 @@
+---
+# =============================================================================
+# SSH Hardening Role - Handlers
+# =============================================================================
+
+- name: Restart sshd
+  ansible.builtin.service:
+    name: "{{ 'ssh' if ansible_os_family == 'Debian' else 'sshd' }}"
+    state: restarted
+  # SICHERHEIT: Erst prüfen ob Konfiguration gültig ist
+  # (passiert automatisch durch 'validate' im template-Task)

@@ -1,0 +1,42 @@
+# =============================================================================
+# .gitignore — Nie committen!
+# =============================================================================
+
+# SSH Private Keys — NIEMALS ins Git!
+ssh_keys/
+*.pem
+*.key
+id_ed25519
+id_rsa
+
+# Reports enthalten Host-Informationen
+reports/
+
+# Ansible Logs
+logs/
+*.log
+*.retry
+
+# Ansible Facts Cache
+/tmp/ansible_facts_cache/
+
+# Collections (werden via requirements.yml installiert)
+collections/ansible_collections/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Vault-Passwort — NIEMALS committen!
+.vault_pass
+.vault_pass.new
+
+# Scripts ausführbar machen

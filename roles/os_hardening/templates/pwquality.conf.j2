@@ -1,0 +1,28 @@
+# =============================================================================
+# /etc/security/pwquality.conf
+# Generiert von Ansible OS Hardening Role
+# =============================================================================
+
+# Minimale Passwortlänge
+minlen = {{ os_pam_password_minlen }}
+
+# Mindestanzahl verschiedener Zeichenklassen (groß, klein, Zahl, Sonderzeichen)
+minclass = {{ os_pam_password_minclass }}
+
+# Max. aufeinanderfolgende gleiche Zeichen
+maxrepeat = 3
+
+# Max. aufeinanderfolgende gleiche Zeichen aus gleicher Klasse
+maxclassrepeat = 4
+
+# Passwort darf nicht den Benutzernamen enthalten
+usercheck = 1
+
+# Anzahl erlaubter Versuche bei Passworteingabe
+retry = {{ os_pam_password_retry }}
+
+# Passwort darf nicht das alte Passwort sein (reversed/rotated)
+difok = 5
+
+# Prüfe gegen einfache Wörterbuch-Passwörter
+dictcheck = 1

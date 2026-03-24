@@ -1,0 +1,412 @@
+---
+# =============================================================================
+# OS Hardening Role — Default Variables
+# Alle Werte über group_vars / host_vars überschreibbar
+# =============================================================================
+
+# ── Pakete (Debian/Ubuntu) ────────────────────────────────────────────────────
+os_packages_install_debian:
+  - auditd
+  - audispd-plugins
+  - aide
+  - fail2ban
+  - unattended-upgrades
+  - apt-listchanges
+  - libpam-pwquality
+  - acl
+  - sudo
+
+os_packages_remove:
+  - telnet
+  - rsh-client
+  - rsh-server
+  - nis
+  - yp-tools
+  - tftpd
+  - atftpd
+  - talk
+  - talkd
+  - xinetd
+
+# ── Pakete (RHEL / Rocky / AlmaLinux) ────────────────────────────────────────
+os_packages_install_rhel:
+  - audit
+  - audit-libs
+  - aide
+  - fail2ban
+  - libpwquality
+  - acl
+  - sudo
+  - dnf-automatic       # Entspricht unattended-upgrades
+
+os_packages_remove_rhel:
+  - telnet
+  - rsh
+  - ypbind
+  - tftp
+  - talk
+
+os_extra_packages_remove: []   # Wird aus group_vars ergänzt
+
+# ── Benutzer & Gruppen ────────────────────────────────────────────────────────
+os_umask_default: "027"          # Restriktive Standard-Dateiberechtigungen
+os_root_password_lock: true      # Root-Passwort sperren (nur sudo)
+os_password_max_days: 90
+os_password_min_days: 1
+os_password_warn_age: 14
+os_inactive_lock_days: 30        # Account nach 30 Tagen Inaktivität sperren
+
+os_system_accounts_lock:         # System-Accounts die gesperrt werden sollen
+  - daemon
+  - bin
+  - sys
+  - sync
+  - games
+  - man
+  - lp
+  - mail
+  - news
+  - uucp
+  - proxy
+  - www-data
+  - backup
+  - list
+  - irc
+  - gnats
+  - nobody
+
+# ── Kernel / sysctl ───────────────────────────────────────────────────────────
+os_ipv6_disable: false            # IPv6 deaktivieren (per group_vars für DB)
+
+os_sysctl_network:
+  # IP Forwarding (nur aktivieren wenn Router/Gateway)
+  net.ipv4.ip_forward: 0
+  net.ipv6.conf.all.forwarding: 0
+  # ICMP Redirects ablehnen
+  net.ipv4.conf.all.accept_redirects: 0
+  net.ipv4.conf.default.accept_redirects: 0
+  net.ipv6.conf.all.accept_redirects: 0
+  net.ipv4.conf.all.send_redirects: 0
+  net.ipv4.conf.default.send_redirects: 0
+  # Source Routing deaktivieren
+  net.ipv4.conf.all.accept_source_route: 0
+  net.ipv4.conf.default.accept_source_route: 0
+  net.ipv6.conf.all.accept_source_route: 0
+  # Reverse Path Filtering
+  net.ipv4.conf.all.rp_filter: 1
+  net.ipv4.conf.default.rp_filter: 1
+  # SYN-Flood-Schutz
+  net.ipv4.tcp_syncookies: 1
+  net.ipv4.tcp_max_syn_backlog: 2048
+  net.ipv4.tcp_synack_retries: 2
+  net.ipv4.tcp_syn_retries: 5
+  # ICMP Broadcast (Smurf-Angriffe)
+  net.ipv4.icmp_echo_ignore_broadcasts: 1
+  net.ipv4.icmp_ignore_bogus_error_responses: 1
+  # Log martians (unmögliche Pakete)
+  net.ipv4.conf.all.log_martians: 1
+  net.ipv4.conf.default.log_martians: 1
+  # TCP Timestamps deaktivieren (Uptime-Fingerprinting)
+  net.ipv4.tcp_timestamps: 0
+
+os_sysctl_kernel:
+  # ASLR erzwingen
+  kernel.randomize_va_space: 2
+  # dmesg für normale User sperren
+  kernel.dmesg_restrict: 1
+  # Kernel-Pointer verstecken
+  kernel.kptr_restrict: 2
+  # Core Dumps einschränken
+  fs.suid_dumpable: 0
+  kernel.core_uses_pid: 1
+  # Magic SysRq deaktivieren
+  kernel.sysrq: 0
+  # Perf-Events einschränken
+  kernel.perf_event_paranoid: 3
+  # ptrace einschränken (verhindert Prozess-Inspektion)
+  kernel.yama.ptrace_scope: 1
+  # Shared Memory Schutz
+  kernel.shm_rmid_forced: 1
+
+os_sysctl_fs:
+  # Symlink-Schutz
+  fs.protected_symlinks: 1
+  fs.protected_hardlinks: 1
+  # FIFO-Schutz
+  fs.protected_fifos: 2
+  fs.protected_regular: 2
+
+# ── Core Dumps ────────────────────────────────────────────────────────────────
+os_coredump_enabled: false
+
+# ── Kernel Module deaktivieren ────────────────────────────────────────────────
+os_kernel_modules_disable:
+  - cramfs
+  - freevxfs
+  - jffs2
+  - hfs
+  - hfsplus
+  - udf
+  - dccp                   # Uncommon Netzwerkprotokoll
+  - sctp                   # Uncommon Netzwerkprotokoll
+  - rds                    # Uncommon Netzwerkprotokoll
+  - tipc                   # Uncommon Netzwerkprotokoll
+  - usb-storage            # USB-Storage deaktivieren
+
+# ── Dateisystem & Mount-Optionen ──────────────────────────────────────────────
+os_tmp_mount_options: "defaults,nodev,nosuid,noexec"
+os_dev_shm_mount_options: "defaults,nodev,nosuid,noexec"
+os_home_nodev: true        # /home: nodev setzen
+
+# ── PAM ───────────────────────────────────────────────────────────────────────
+os_pam_password_minlen: 12
+os_pam_password_minclass: 4      # min. 4 Zeichenklassen (groß/klein/zahl/sonderz.)
+os_pam_password_retry: 3
+os_pam_faillock_deny: 5          # Account nach 5 Fehlversuchen sperren
+os_pam_faillock_unlock_time: 900 # 15 Minuten gesperrt
+os_pam_faillock_findtime: 600    # Zeitfenster für Fehlversuche: 10 Min.
+os_pam_pwhistory_remember: 5     # Letzte 5 Passwörter gesperrt (keine Wiederholung)
+
+# ── Auditd ────────────────────────────────────────────────────────────────────
+os_auditd_enabled: true
+os_auditd_max_log_file: 50       # MB
+os_auditd_max_log_file_action: rotate
+os_auditd_num_logs: 5
+os_auditd_space_left_action: email
+os_auditd_admin_space_left_action: halt
+os_auditd_immutable: false       # true = Regeln nach Boot nicht mehr änderbar (Produktiv)
+
+# ── Fail2ban ──────────────────────────────────────────────────────────────────
+os_fail2ban_enabled: true
+os_fail2ban_bantime: 3600        # 1 Stunde
+os_fail2ban_findtime: 600
+os_fail2ban_maxretry: 5
+
+# ── NTP ───────────────────────────────────────────────────────────────────────
+os_ntp_enabled: true
+os_ntp_servers:
+  - "0.de.pool.ntp.org"
+  - "1.de.pool.ntp.org"
+
+# ── Unattended Upgrades ───────────────────────────────────────────────────────
+os_unattended_upgrades: true
+os_unattended_upgrades_reboot: false
+os_unattended_upgrades_reboot_time: "03:00"
+os_unattended_upgrades_mail: ""       # E-Mail bei Fehlern (leer = deaktiviert)
+
+# ── Timezone ──────────────────────────────────────────────────────────────────
+os_timezone: "Europe/Berlin"
+
+# ── MOTD ──────────────────────────────────────────────────────────────────────
+os_motd_enabled: true
+os_motd_text: |
+  ############################################################
+  #              AUTHORIZED ACCESS ONLY                      #
+  #  This system is monitored. All activity is logged.       #
+  #  Unauthorized access will be prosecuted.                 #
+  ############################################################
+
+# ── AIDE — Filesystem Integrity Monitoring ────────────────────────────────────
+# BSI SYS.1.3.A9 · CIS Benchmark 6.1
+aide_enabled: true
+
+# Pfade
+aide_db_dir: "/var/lib/aide"
+aide_log_dir: "/var/log/aide"
+
+# Initialisierung
+aide_init_timeout: 1800               # Max. Sekunden für initiale DB-Erstellung
+aide_init_verbose: 0
+aide_reinit: false                    # true = DB neu erstellen (Baseline reset!)
+
+# Täglicher Check-Cronjob
+aide_cron_hour: "2"
+aide_cron_minute: "30"
+
+# Wöchentlicher DB-Update
+aide_auto_update: false
+aide_db_update_hour: "3"
+aide_db_update_minute: "0"
+aide_db_update_weekday: "0"           # 0=Sonntag
+
+# Alterswarnung
+aide_db_max_age_days: 90
+
+# Report-Aufbewahrung
+aide_report_keep_days: 90
+aide_report_verbose: 5
+
+# Überwachte Pfade
+aide_monitor_home: true
+aide_extra_paths: []
+aide_extra_groups: []
+
+# Alert-Konfiguration
+aide_alert_mail: ""                   # E-Mail für Alerts (leer = deaktiviert)
+aide_alert_mail_from: ""             # Absender (leer = aide-noreply@hostname)
+aide_webhook_url: ""                 # Webhook-URL (leer = deaktiviert)
+aide_webhook_format: "slack"         # "slack" oder "generic"
+
+# ── Remote-Logging (BSI OPS.1.1.5 · CIS 6.2) ─────────────────────────────────
+
+# --- Allgemein ----------------------------------------------------------------
+syslog_remote_enabled: true          # Logs an Remote-Server weiterleiten
+syslog_remote_host: ""               # PFLICHT: z.B. "syslog.example.com"
+syslog_remote_port: 514              # 514=UDP/TCP, 6514=TLS
+syslog_remote_protocol: "tcp"        # "udp" | "tcp" | "tls"
+syslog_remote_filter: "*.*"          # Welche Logs weiterleiten (rsyslog-Syntax)
+syslog_remote_retry_count: "-1"      # -1 = endlos wiederholen
+syslog_remote_retry_interval: 30     # Sekunden zwischen Retry-Versuchen
+
+# --- Queue-Konfiguration -----------------------------------------------------
+# Disk-Queue puffert Logs bei Verbindungsausfall (verhindert Datenverlust)
+syslog_queue_max_disk: "1g"          # Max. Disk-Platz für Queue
+syslog_queue_max_messages: 50000     # Max. Nachrichten in Queue
+syslog_queue_discard_mark: 45000     # Ab hier Debug-Logs verwerfen
+
+# --- TLS-Konfiguration (nur wenn syslog_remote_protocol: tls) ----------------
+syslog_tls_cert_dir: "/etc/rsyslog.d/tls"
+syslog_tls_auth_mode: "x509/name"   # "x509/name" | "anon" | "x509/fingerprint"
+syslog_tls_ca_cert: ""              # Inhalt des CA-Zertifikats (aus Vault)
+syslog_tls_client_cert: ""          # Inhalt des Client-Zertifikats (aus Vault)
+syslog_tls_client_key: ""           # Inhalt des Client-Keys (aus Vault!)
+
+# --- journald-Konfiguration --------------------------------------------------
+syslog_journald_forward_to_syslog: true   # An rsyslog weitergeben
+syslog_journald_max_use: "2G"             # Max. Disk-Platz für Journal
+syslog_journald_keep_free: "500M"         # Mindest-Freiraum auf Disk
+syslog_journald_max_file_size: "200M"     # Max. Größe einer Journal-Datei
+syslog_journald_max_files: "10"           # Max. Anzahl rotierter Dateien
+syslog_journald_max_retention_sec: "7776000"  # 90 Tage (BSI-Mindestaufbewahrung)
+syslog_journald_max_file_sec: "1month"
+syslog_journald_rate_interval: "30s"
+syslog_journald_rate_burst: 10000
+syslog_journald_seal: false          # FSS-Sealing (erhöhter Schutzbedarf)
+
+# --- rsyslog-Konfiguration ---------------------------------------------------
+syslog_rsyslog_rate_interval: 5      # Sekunden für Rate-Limit-Fenster
+syslog_rsyslog_rate_burst: 10000     # Max. Nachrichten pro Fenster
+syslog_stats_log_file: "/var/log/rsyslog-stats.log"
+
+# --- Pakete ------------------------------------------------------------------
+syslog_packages_debian:
+  - rsyslog
+  - rsyslog-gnutls            # TLS-Unterstützung
+  - audispd-plugins           # auditd Remote-Forwarding
+
+syslog_packages_rhel:
+  - rsyslog
+  - rsyslog-gnutls
+  - audispd-plugins
+
+# --- auditd Remote-Plugin ----------------------------------------------------
+syslog_auditd_remote_enabled: true
+syslog_auditd_remote_port: 60
+
+# --- Server-Modus (nur auf dedizierten Syslog-Servern aktivieren) ------------
+syslog_server_enabled: false         # true = dieser Host empfängt Logs
+syslog_server_port: 514
+syslog_server_protocol: "tcp"        # "udp" | "tcp" | "tls"
+syslog_server_log_dir: "/var/log/remote"
+syslog_server_log_rotate_days: 90    # BSI-Mindestaufbewahrung: 90 Tage
+syslog_server_max_sessions: 500
+syslog_server_rate_burst: 50000
+
+# ── Shell-Härtung (BSI SYS.1.3 / CIS 5.4) ────────────────────────────────────
+shell_tmout_seconds: 900        # 15 Minuten — BSI/CIS empfiehlt ≤ 900s
+shell_histfilesize: 10000       # History-Datei max. Einträge
+shell_histsize: 1000            # History im RAM
+shell_remove_netrc: true        # .netrc (Klartext-Passwörter) entfernen
+shell_remove_forward: true      # .forward (Mail-Weiterleitung) entfernen
+
+# ── Cron-Zugriffskontrolle (BSI SYS.1.3 / CIS 5.1) ──────────────────────────
+# Welche User (außer root) dürfen cron/at nutzen?
+cron_allow_users: []            # z.B. ["deploy"] — leer = nur root
+
+# ── systemd Service-Härtung (BSI SYS.1.3.A6) ─────────────────────────────────
+# Dienste die mit Sandbox-Overrides gehärtet werden
+systemd_harden_services:
+  - ssh.service
+  - rsyslog.service
+  - cron.service
+  - auditd.service
+  - fail2ban.service
+  - systemd-timesyncd.service
+
+# Dienste die deaktiviert werden sollen (nicht benötigt)
+systemd_disable_services:
+  - avahi-daemon.service
+  - cups.service
+  - isc-dhcp-server.service
+  - isc-dhcp-server6.service
+  - slapd.service
+  - nfs-server.service
+  - rpcbind.service
+  - rsync.service
+  - samba.service
+  - squid.service
+  - snmpd.service
+  - nis.service
+
+# Sockets die maskiert werden sollen
+systemd_mask_sockets:
+  - avahi-daemon.socket
+  - cups.socket
+  - rpcbind.socket
+
+# Syscall-Filter aktivieren (kann bei manchen Diensten Probleme bereiten)
+systemd_syscall_filter_enabled: true
+
+# Globale systemd-Ressourcenlimits
+systemd_default_limit_nofile: 65536
+systemd_default_limit_nproc: 8192
+systemd_default_timeout_start: "90s"
+systemd_default_timeout_stop: "90s"
+
+# ── Lynis Hardening-Audit (BSI DER.3) ────────────────────────────────────────
+lynis_enabled: true
+lynis_score_minimum: 70         # Mindest-Hardening-Index (0-100)
+lynis_score_fail_below: false   # true = Playbook schlägt fehl wenn Score zu niedrig
+
+# ── AppArmor / MAC (BSI SYS.1.3.A6 · CIS 1.3) ────────────────────────────────
+apparmor_enabled: true
+apparmor_enforce_all: true       # Alle Profile in enforce-Mode setzen
+
+apparmor_packages_debian:
+  - apparmor
+  - apparmor-utils
+  - apparmor-profiles
+  - apparmor-profiles-extra
+
+apparmor_packages_rhel:
+  - apparmor
+  - apparmor-utils
+
+# Eigene Profile deployen (src=Template-Name, dest=Zielpfad)
+apparmor_custom_profiles:
+  - { src: "apparmor-sshd.j2",    dest: "/etc/apparmor.d/usr.sbin.sshd" }
+  - { src: "apparmor-rsyslog.j2", dest: "/etc/apparmor.d/usr.sbin.rsyslogd" }
+  - { src: "apparmor-auditd.j2",  dest: "/etc/apparmor.d/usr.sbin.auditd" }
+
+# Explizit in enforce-Mode setzen
+apparmor_enforce_profiles:
+  - /usr/sbin/sshd
+  - /usr/sbin/rsyslogd
+  - /usr/sbin/auditd
+
+# Zusätzliche Kernel-Parameter (AppArmor wird via grub-default.j2 aktiviert)
+apparmor_extra_kernel_params: ""
+
+# ── Bootloader-Härtung (BSI SYS.1.3.A5 · CIS 1.4) ───────────────────────────
+bootloader_enabled: true
+
+# GRUB-Passwort: kommt aus Vault (vault_bootloader_grub_password)
+# Direktzuweisung hier nur als Fallback — besser via Vault!
+bootloader_grub_password: "{{ vault_bootloader_grub_password | default('') }}"
+bootloader_grub_superuser: "grub_admin"
+bootloader_grub_timeout: 5
+bootloader_menuentry_unrestricted: true  # Normaler Boot ohne Passwort möglich
+bootloader_disable_recovery: true        # Recovery-Mode deaktivieren
+bootloader_disable_os_prober: true       # Kein Auto-Detect anderer OS
+bootloader_extra_kernel_params: "apparmor=1 security=apparmor vsyscall=none page_poison=1 pti=on slab_nomerge init_on_alloc=1"
+bootloader_cmdline_default: "quiet splash"

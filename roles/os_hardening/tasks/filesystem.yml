@@ -1,0 +1,148 @@
+---
+# =============================================================================
+# OS Hardening | Dateisystem-Härtung
+# =============================================================================
+
+- name: "Filesystem | /tmp mit sicheren Mount-Optionen einbinden"
+  ansible.posix.mount:
+    path: /tmp
+    src: tmpfs
+    fstype: tmpfs
+    opts: "{{ os_tmp_mount_options }}"
+    state: mounted
+  tags: [os, filesystem]
+
+- name: "Filesystem | /dev/shm mit sicheren Mount-Optionen"
+  ansible.posix.mount:
+    path: /dev/shm
+    src: tmpfs
+    fstype: tmpfs
+    opts: "{{ os_dev_shm_mount_options }}"
+    state: mounted
+  tags: [os, filesystem]
+
+- name: "Filesystem | Sticky-Bit auf world-writable Verzeichnisse setzen"
+  ansible.builtin.shell: |
+    find / -xdev -type d -perm -0002 -not -perm -1000 2>/dev/null \
+      -exec chmod +t {} \;
+    echo "done"
+  args:
+    executable: /bin/bash
+  args:
+    executable: /bin/bash
+  register: sticky_result
+  changed_when: "'done' in sticky_result.stdout"
+  tags: [os, filesystem]
+
+# Scans laufen parallel im Hintergrund (async) — blockieren den Play nicht
+- name: "Filesystem | Scan: world-writable Dateien (async)"
+  ansible.builtin.shell: |
+    find / -xdev -type f -perm -0002 \
+      -not -path "/proc/*" -not -path "/sys/*" -not -path "/dev/*" \
+      2>/dev/null || true
+  args:
+    executable: /bin/bash
+  args:
+    executable: /bin/bash
+  async: 120
+  poll: 0
+  register: scan_ww_job
+  changed_when: false
+  tags: [os, filesystem, audit]
+
+- name: "Filesystem | Scan: unowned Dateien (async)"
+  ansible.builtin.shell: |
+    find / -xdev \( -nouser -o -nogroup \) \
+      -not -path "/proc/*" -not -path "/sys/*" \
+      2>/dev/null || true
+  args:
+    executable: /bin/bash
+  args:
+    executable: /bin/bash
+  async: 120
+  poll: 0
+  register: scan_unowned_job
+  changed_when: false
+  tags: [os, filesystem, audit]
+
+- name: "Filesystem | Scan: SUID/SGID Binaries (async)"
+  ansible.builtin.shell: |
+    find / -xdev \( -perm -4000 -o -perm -2000 \) -type f \
+      -not -path "/proc/*" 2>/dev/null | sort || true
+  args:
+    executable: /bin/bash
+  args:
+    executable: /bin/bash
+  async: 120
+  poll: 0
+  register: scan_suid_job
+  changed_when: false
+  tags: [os, filesystem, audit]
+
+# Auf Scan-Ergebnisse warten (max. 120 s)
+- name: "Filesystem | Warte auf Scan-Ergebnisse"
+  ansible.builtin.async_status:
+    jid: "{{ item.ansible_job_id }}"
+  loop:
+    - "{{ scan_ww_job }}"
+    - "{{ scan_unowned_job }}"
+    - "{{ scan_suid_job }}"
+  register: scan_results
+  until: scan_results.finished
+  retries: 24
+  delay: 5
+  failed_when: false
+  tags: [os, filesystem, audit]
+
+- name: "Filesystem | Scans auswerten"
+  ansible.builtin.set_fact:
+    fs_world_writable: "{{ scan_results.results[0].stdout_lines | default([]) }}"
+    fs_unowned:        "{{ scan_results.results[1].stdout_lines | default([]) }}"
+    fs_suid_binaries:  "{{ scan_results.results[2].stdout_lines | default([]) }}"
+  tags: [os, filesystem, audit]
+
+- name: "Filesystem | WARNUNG — World-writable Dateien"
+  ansible.builtin.debug:
+    msg: "⚠️  {{ fs_world_writable | length }} world-writable Dateien gefunden"
+  when: fs_world_writable | length > 0
+  tags: [os, filesystem, audit]
+
+- name: "Filesystem | WARNUNG — Unowned Dateien"
+  ansible.builtin.debug:
+    msg: "⚠️  {{ fs_unowned | length }} unowned Dateien gefunden"
+  when: fs_unowned | length > 0
+  tags: [os, filesystem, audit]
+
+- name: "Filesystem | Scan-Ergebnisse lokal sichern"
+  ansible.builtin.copy:
+    content: |
+      ================================================================
+      FILESYSTEM SCAN — {{ inventory_hostname }}
+      Datum: {{ ansible_date_time.iso8601 }}
+      ================================================================
+
+      WORLD-WRITABLE DATEIEN ({{ fs_world_writable | length }}):
+      {% for f in fs_world_writable %}
+      {{ f }}
+      {% else %}
+      Keine gefunden.
+      {% endfor %}
+
+      UNOWNED DATEIEN ({{ fs_unowned | length }}):
+      {% for f in fs_unowned %}
+      {{ f }}
+      {% else %}
+      Keine gefunden.
+      {% endfor %}
+
+      SUID/SGID BINARIES ({{ fs_suid_binaries | length }}):
+      {% for f in fs_suid_binaries %}
+      {{ f }}
+      {% else %}
+      Keine gefunden.
+      {% endfor %}
+    dest: "{{ os_report_dir }}/{{ inventory_hostname }}_filesystem_scan_{{ ansible_date_time.date }}.txt"
+    mode: "0640"
+  delegate_to: localhost
+  become: false
+  tags: [os, filesystem, audit]

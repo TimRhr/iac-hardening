@@ -1,0 +1,245 @@
+---
+# =============================================================================
+# OS Hardening | Lynis — Automatischer Hardening-Score
+# BSI DER.3 · CIS L2
+#
+# Lynis führt nach dem Hardening einen unabhängigen Audit durch und
+# liefert einen messbaren Hardening-Index (0–100).
+# Ergebnisse werden lokal in reports/ gespeichert.
+# =============================================================================
+
+# ── Lynis installieren ────────────────────────────────────────────────────────
+
+- name: "Lynis | Repository hinzufügen (Debian/Ubuntu)"
+- name: "Lynis | GPG-Schlüssel importieren (Debian/Ubuntu — modern)"
+  ansible.builtin.shell: |
+    curl -fsSL https://packages.cisofy.com/keys/cisofy-software-public.key \
+      | gpg --dearmor -o /usr/share/keyrings/cisofy-lynis.gpg
+  args:
+    executable: /bin/bash
+  args:
+    creates: /usr/share/keyrings/cisofy-lynis.gpg
+  when: ansible_os_family == 'Debian'
+  failed_when: false
+  tags: [os, lynis, packages]
+
+- name: "Lynis | Repository eintragen (Debian/Ubuntu)"
+  ansible.builtin.copy:
+    content: "deb [signed-by=/usr/share/keyrings/cisofy-lynis.gpg] https://packages.cisofy.com/community/lynis/deb/ stable main\n"
+    dest: /etc/apt/sources.list.d/cisofy-lynis.list
+    owner: root
+    group: root
+    mode: "0644"
+  when: ansible_os_family == 'Debian'
+  failed_when: false
+  tags: [os, lynis, packages]
+
+- name: "Lynis | Paket installieren (Debian/Ubuntu)"
+  ansible.builtin.apt:
+    name: lynis
+    state: present
+    update_cache: true
+  when: ansible_os_family == 'Debian'
+  failed_when: false
+  tags: [os, lynis, packages]
+
+- name: "Lynis | Paket installieren (RHEL — EPEL)"
+  ansible.builtin.dnf:
+    name: lynis
+    state: present
+    enablerepo: epel
+  when: ansible_os_family == 'RedHat'
+  failed_when: false
+  tags: [os, lynis, packages]
+
+- name: "Lynis | Prüfe ob Lynis verfügbar ist"
+  ansible.builtin.command: which lynis
+  register: lynis_available
+  changed_when: false
+  failed_when: false
+  tags: [os, lynis]
+
+- name: "Lynis | Version anzeigen"
+  ansible.builtin.command: lynis show version
+  register: lynis_version
+  changed_when: false
+  failed_when: false
+  when: lynis_available.rc == 0
+  tags: [os, lynis]
+
+# ── Lynis Audit ausführen ─────────────────────────────────────────────────────
+
+- name: "Lynis | Audit ausführen (dauert ca. 1-3 Minuten)"
+  ansible.builtin.command: >-
+    lynis audit system
+    --no-colors
+    --quiet
+    --logfile /var/log/lynis.log
+    --report-file /var/log/lynis-report.dat
+    --cronjob
+  register: lynis_audit
+  changed_when: false
+  failed_when: false
+  async: 300
+  poll: 15
+  when: lynis_available.rc == 0
+  tags: [os, lynis, audit]
+
+# ── Hardening-Score extrahieren ───────────────────────────────────────────────
+
+- name: "Lynis | Hardening-Index aus Report extrahieren"
+  ansible.builtin.shell: |
+    grep "hardening_index" /var/log/lynis-report.dat 2>/dev/null \
+      | cut -d= -f2 | tr -d '[:space:]'
+  args:
+    executable: /bin/bash
+  register: lynis_score
+  changed_when: false
+  failed_when: false
+  when: lynis_available.rc == 0
+  tags: [os, lynis, audit]
+
+- name: "Lynis | Warnungen zählen"
+  ansible.builtin.shell: |
+    grep -c "^warning\[\]" /var/log/lynis-report.dat 2>/dev/null || echo "0"
+  args:
+    executable: /bin/bash
+  register: lynis_warnings
+  changed_when: false
+  failed_when: false
+  when: lynis_available.rc == 0
+  tags: [os, lynis, audit]
+
+- name: "Lynis | Suggestions zählen"
+  ansible.builtin.shell: |
+    grep -c "^suggestion\[\]" /var/log/lynis-report.dat 2>/dev/null || echo "0"
+  args:
+    executable: /bin/bash
+  register: lynis_suggestions
+  changed_when: false
+  failed_when: false
+  when: lynis_available.rc == 0
+  tags: [os, lynis, audit]
+
+- name: "Lynis | Top-Warnungen extrahieren"
+  ansible.builtin.shell: |
+    grep "^warning\[\]" /var/log/lynis-report.dat 2>/dev/null \
+      | cut -d= -f2 | head -20 || echo "keine"
+  args:
+    executable: /bin/bash
+  register: lynis_top_warnings
+  changed_when: false
+  failed_when: false
+  when: lynis_available.rc == 0
+  tags: [os, lynis, audit]
+
+- name: "Lynis | Top-Suggestions extrahieren"
+  ansible.builtin.shell: |
+    grep "^suggestion\[\]" /var/log/lynis-report.dat 2>/dev/null \
+      | cut -d= -f2 | head -20 || echo "keine"
+  args:
+    executable: /bin/bash
+  register: lynis_top_suggestions
+  changed_when: false
+  failed_when: false
+  when: lynis_available.rc == 0
+  tags: [os, lynis, audit]
+
+# ── Schwellenwert-Prüfung ────────────────────────────────────────────────────
+
+- name: "Lynis | Score gegen BSI-Mindestschwellenwert prüfen"
+  ansible.builtin.debug:
+    msg: >-
+      {% set score = lynis_score.stdout | default('0') | int %}
+      {% if score >= lynis_score_minimum %}
+      ✅ Hardening-Index {{ score }}/100 — Schwellenwert {{ lynis_score_minimum }} erreicht
+      {% else %}
+      ⚠️  Hardening-Index {{ score }}/100 — UNTER Schwellenwert {{ lynis_score_minimum }}!
+         Bitte Warnungen prüfen und Hardening verbessern.
+      {% endif %}
+  when: lynis_available.rc == 0
+  tags: [os, lynis, audit]
+
+- name: "Lynis | FEHLER bei zu niedrigem Score (wenn lynis_score_fail_below aktiviert)"
+  ansible.builtin.fail:
+    msg: >-
+      Lynis Hardening-Index {{ lynis_score.stdout | default('0') }}/100
+      liegt unter dem konfigurierten Minimum von {{ lynis_score_minimum }}.
+      Hardening nicht ausreichend — bitte Warnungen beheben.
+  when:
+    - lynis_available.rc == 0
+    - lynis_score_fail_below | default(false)
+    - (lynis_score.stdout | default('0') | int) < lynis_score_minimum
+  tags: [os, lynis, audit]
+
+# ── Report lokal speichern ────────────────────────────────────────────────────
+
+- name: "Lynis | Rohdaten-Report herunterladen"
+  ansible.builtin.fetch:
+    src: /var/log/lynis-report.dat
+    dest: "{{ os_report_dir }}/{{ inventory_hostname }}_lynis-report_{{ ansible_date_time.date }}.dat"
+    flat: true
+  when:
+    - lynis_available.rc == 0
+    - lynis_audit is not skipped
+  tags: [os, lynis, report]
+
+- name: "Lynis | Lesbaren Report erstellen"
+  ansible.builtin.copy:
+    content: |
+      ================================================================
+      LYNIS HARDENING AUDIT REPORT
+      ================================================================
+      Host:             {{ inventory_hostname }} ({{ ansible_host }})
+      Datum:            {{ ansible_date_time.iso8601 }}
+      OS:               {{ ansible_distribution }} {{ ansible_distribution_version }}
+      Lynis Version:    {{ lynis_version.stdout | default('unbekannt') }}
+      ----------------------------------------------------------------
+      ERGEBNIS
+      ----------------------------------------------------------------
+      Hardening-Index:  {{ lynis_score.stdout | default('N/A') }}/100
+      Warnungen:        {{ lynis_warnings.stdout | default('0') }}
+      Suggestions:      {{ lynis_suggestions.stdout | default('0') }}
+      Mindest-Score:    {{ lynis_score_minimum }}
+      Bestanden:        {{ 'JA' if (lynis_score.stdout | default('0') | int) >= lynis_score_minimum else 'NEIN' }}
+      ----------------------------------------------------------------
+      TOP WARNUNGEN (bis 20)
+      ----------------------------------------------------------------
+      {{ lynis_top_warnings.stdout | default('keine') }}
+      ----------------------------------------------------------------
+      TOP SUGGESTIONS (bis 20)
+      ----------------------------------------------------------------
+      {{ lynis_top_suggestions.stdout | default('keine') }}
+      ----------------------------------------------------------------
+      VOLLSTÄNDIGE REPORTS
+      ----------------------------------------------------------------
+      Rohdaten:  /var/log/lynis-report.dat
+      Log:       /var/log/lynis.log
+      ================================================================
+    dest: "{{ os_report_dir }}/{{ inventory_hostname }}_lynis_{{ ansible_date_time.date }}.txt"
+    mode: "0640"
+  delegate_to: localhost
+  become: false
+  when: lynis_available.rc == 0
+  tags: [os, lynis, report]
+
+- name: "Lynis | Zusammenfassung"
+  ansible.builtin.debug:
+    msg:
+      - "============================================="
+      - "  Lynis Hardening-Audit"
+      - "  BSI DER.3"
+      - "============================================="
+      - "  Score:       {{ lynis_score.stdout | default('N/A') }}/100"
+      - "  Warnungen:   {{ lynis_warnings.stdout | default('0') }}"
+      - "  Suggestions: {{ lynis_suggestions.stdout | default('0') }}"
+      - "  Report:      {{ os_report_dir }}/{{ inventory_hostname }}_lynis_*.txt"
+      - "============================================="
+  when: lynis_available.rc == 0
+  tags: [os, lynis, summary]
+
+- name: "Lynis | WARNUNG — Lynis nicht verfügbar"
+  ansible.builtin.debug:
+    msg: "⚠️  Lynis ist nicht installiert — Audit übersprungen"
+  when: lynis_available.rc != 0
+  tags: [os, lynis, summary]

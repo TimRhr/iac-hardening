@@ -1,0 +1,59 @@
+---
+# =============================================================================
+# OS Hardening Role — Handlers
+# =============================================================================
+
+- name: Restart auditd
+  ansible.builtin.service:
+    name: auditd
+    state: restarted
+
+- name: Reload audit rules
+  ansible.builtin.command: augenrules --load
+  register: augenrules_result
+  changed_when: augenrules_result.rc == 0
+
+- name: Restart fail2ban
+  ansible.builtin.service:
+    name: fail2ban
+    state: restarted
+
+- name: Restart timesyncd
+  ansible.builtin.service:
+    name: systemd-timesyncd
+    state: restarted
+
+- name: Restart cron
+  ansible.builtin.service:
+    name: "{{ 'cron' if ansible_os_family == 'Debian' else 'crond' }}"
+    state: restarted
+
+- name: Restart rsyslog
+  ansible.builtin.service:
+    name: rsyslog
+    state: restarted
+
+- name: Restart journald
+  ansible.builtin.service:
+    name: systemd-journald
+    state: restarted
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Update grub
+  ansible.builtin.command: update-grub
+  failed_when: false
+  changed_when: true
+
+- name: Update grub rhel
+  ansible.builtin.command: grub2-mkconfig -o /boot/grub2/grub.cfg
+  failed_when: false
+  changed_when: true
+
+- name: Reload apparmor
+  ansible.builtin.service:
+    name: apparmor
+    state: reloaded
+  failed_when: false

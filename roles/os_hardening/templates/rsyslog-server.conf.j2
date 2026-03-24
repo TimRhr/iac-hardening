@@ -1,0 +1,87 @@
+# =============================================================================
+# /etc/rsyslog.d/00-server.conf
+# Generiert von Ansible OS Hardening Role
+# BSI OPS.1.1.5 — Zentraler Syslog-Server
+# WARNUNG: Wird bei Ansible-Run überschrieben!
+# =============================================================================
+
+# ── Empfangs-Module ───────────────────────────────────────────────────────────
+
+{% if syslog_server_protocol == 'udp' %}
+# UDP-Empfang (Port {{ syslog_server_port }}) — keine Verbindungsgarantie
+module(load="imudp")
+input(type="imudp"
+      port="{{ syslog_server_port }}"
+      ruleset="RemoteServer"
+      RateLimit.Interval="1"
+      RateLimit.Burst="{{ syslog_server_rate_burst }}")
+
+{% elif syslog_server_protocol == 'tcp' %}
+# TCP-Empfang (Port {{ syslog_server_port }}) — zuverlässig, BSI empfohlen
+module(load="imtcp"
+       MaxSessions="{{ syslog_server_max_sessions }}"
+       KeepAlive="on")
+input(type="imtcp"
+      port="{{ syslog_server_port }}"
+      ruleset="RemoteServer")
+
+{% elif syslog_server_protocol == 'tls' %}
+# TLS-Empfang (Port {{ syslog_server_port }}) — verschlüsselt, BSI für sensible Daten
+module(load="imtcp"
+       MaxSessions="{{ syslog_server_max_sessions }}"
+       KeepAlive="on")
+module(load="gtls")
+input(type="imtcp"
+      port="{{ syslog_server_port }}"
+      ruleset="RemoteServer"
+      StreamDriver.Name="gtls"
+      StreamDriver.Mode="1"
+      StreamDriver.AuthMode="{{ syslog_tls_auth_mode }}"
+      StreamDriver.CAFile="{{ syslog_tls_cert_dir }}/ca.pem"
+{% if syslog_tls_client_cert | default('') != '' %}
+      StreamDriver.CertFile="{{ syslog_tls_cert_dir }}/server-cert.pem"
+      StreamDriver.KeyFile="{{ syslog_tls_cert_dir }}/server-key.pem"
+{% endif %}
+)
+{% endif %}
+
+# ── Regelwerk: Empfangene Logs verarbeiten ─────────────────────────────────────
+ruleset(name="RemoteServer") {
+
+  # Auth-Logs aller Remote-Hosts separat speichern (BSI OPS.1.1.5)
+  if $syslogfacility-text == "auth" or $syslogfacility-text == "authpriv" then {
+    action(type="omfile"
+      DynaFile="RemoteHostLogDaily"
+      template="RFC5424"
+      FileCreateMode="0640"
+      DirCreateMode="0750")
+  }
+
+  # Kritische Meldungen sofort in eine gemeinsame Alarmierungs-Datei
+  if $syslogseverity <= 2 then {
+    action(type="omfile"
+      File="{{ syslog_server_log_dir }}/CRITICAL.log"
+      template="RFC5424"
+      FileCreateMode="0640")
+  }
+
+  # Alle Logs nach Host/Datum sortiert ablegen
+  action(type="omfile"
+    DynaFile="RemoteHostLogDaily"
+    template="RFC5424"
+    FileOwner="root"
+    FileGroup="root"
+    FileCreateMode="0640"
+    DirOwner="root"
+    DirGroup="root"
+    DirCreateMode="0750"
+    closeTimeout="10"
+    asyncWriting="on")
+}
+
+# ── Queue-Statistiken ─────────────────────────────────────────────────────────
+module(load="impstats"
+  interval="300"
+  severity="7"
+  log.syslog="on"
+  log.file="/var/log/rsyslog-server-stats.log")

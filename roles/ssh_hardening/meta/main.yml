@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  author: "dein-name"
+  description: "SSH Hardening Role - Härtet OpenSSH nach CIS/BSI-Empfehlungen"
+  license: "MIT"
+  min_ansible_version: "2.12"
+  platforms:
+    - name: Ubuntu
+      versions: ["20.04", "22.04", "24.04"]
+    - name: Debian
+      versions: ["11", "12"]
+    - name: EL
+      versions: ["8", "9"]   # RHEL / Rocky / AlmaLinux
+
+dependencies: []

@@ -1,0 +1,46 @@
+# =============================================================================
+# /etc/apparmor.d/usr.sbin.auditd
+# AppArmor-Profil für auditd
+# Generiert von Ansible OS Hardening Role
+# =============================================================================
+
+#include <tunables/global>
+
+/usr/sbin/auditd {
+  #include <abstractions/base>
+
+  capability audit_control,
+  capability audit_read,
+  capability audit_write,
+  capability sys_nice,
+  capability net_admin,
+
+  network netlink raw,
+
+  /usr/sbin/auditd mr,
+  /sbin/auditd mr,
+  /usr/lib{,32,64}/** mr,
+
+  # Konfiguration
+  /etc/audit/ r,
+  /etc/audit/** r,
+
+  # Log-Dateien
+  /var/log/audit/ rw,
+  /var/log/audit/** rw,
+
+  # Audit-Sockets
+  /run/audit_events rw,
+  /run/auditd.pid rw,
+
+  # Plugins
+  /sbin/audispd ix,
+  /usr/sbin/audisp-remote ix,
+  /usr/sbin/audisp-syslog ix,
+  /etc/audit/plugins.d/ r,
+  /etc/audit/plugins.d/** r,
+
+  /proc/sys/kernel/pid_max r,
+
+  #include <local/usr.sbin.auditd>
+}

@@ -1,0 +1,233 @@
+---
+# =============================================================================
+# OS Hardening | Shell-Härtung
+# BSI SYS.1.3 · CIS 5.4 / 6.2
+#
+# Maßnahmen:
+#   - Shell-Timeout (TMOUT) für alle interaktiven Shells
+#   - root PATH-Integrität prüfen und bereinigen
+#   - .netrc und .forward Dateien entfernen
+#   - /etc/shells auf zugelassene Shells beschränken
+#   - Bash-History absichern
+# =============================================================================
+
+# ── Shell-Timeout (TMOUT) ─────────────────────────────────────────────────────
+
+- name: "Shell | TMOUT via /etc/profile.d deployen"
+  ansible.builtin.copy:
+    content: |
+      # ==========================================================
+      # Shell-Timeout — Ansible OS Hardening (BSI SYS.1.3 / CIS 5.4.3.2)
+      # Interaktive Shells werden nach {{ shell_tmout_seconds }} Sekunden
+      # Inaktivität automatisch beendet.
+      # readonly verhindert, dass User den Timeout umgehen.
+      # ==========================================================
+      TMOUT={{ shell_tmout_seconds }}
+      readonly TMOUT
+      export TMOUT
+    dest: /etc/profile.d/99-hardening-tmout.sh
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [os, shell, timeout]
+
+- name: "Shell | TMOUT in /etc/bash.bashrc setzen (Debian interaktive Shells)"
+  ansible.builtin.blockinfile:
+    path: /etc/bash.bashrc
+    block: |
+      # Ansible OS Hardening — Shell-Timeout (CIS 5.4.3.2)
+      TMOUT={{ shell_tmout_seconds }}
+      readonly TMOUT
+      export TMOUT
+    marker: "# {mark} ANSIBLE MANAGED BLOCK — shell-timeout"
+    state: present
+  when: ansible_os_family == 'Debian'
+  tags: [os, shell, timeout]
+
+# ── root PATH-Integrität ──────────────────────────────────────────────────────
+
+- name: "Shell | root PATH — Prüfe auf unsichere Einträge (CIS 5.4.2.5)"
+  ansible.builtin.shell: |
+    ISSUES=""
+    IFS=: read -ra dirs <<< "$PATH"
+    for dir in "${dirs[@]}"; do
+      # Leerer Eintrag = aktuelles Verzeichnis (.)
+      if [ -z "$dir" ] || [ "$dir" = "." ]; then
+        ISSUES="${ISSUES}UNSICHER: '.' oder leerer Eintrag im PATH\n"
+        continue
+      fi
+      # Nicht-absolute Pfade
+      if [[ "$dir" != /* ]]; then
+        ISSUES="${ISSUES}UNSICHER: relativer Pfad '$dir' im PATH\n"
+        continue
+      fi
+      # Beschreibbare Verzeichnisse (für andere als root)
+      if [ -d "$dir" ]; then
+        perm=$(stat -c "%a" "$dir" 2>/dev/null)
+        if [[ "$perm" =~ [2367]$ ]] || [[ "$perm" =~ ^[2367] ]]; then
+          ISSUES="${ISSUES}WARNUNG: '$dir' ist world/group-writable (Berechtigungen: $perm)\n"
+        fi
+      fi
+    done
+    echo -e "${ISSUES:-OK: root PATH sicher}"
+  args:
+    executable: /bin/bash
+  register: shell_path_check
+  changed_when: false
+  tags: [os, shell, path]
+
+- name: "Shell | root PATH — Ergebnis"
+  ansible.builtin.debug:
+    msg: "root PATH Check: {{ shell_path_check.stdout_lines }}"
+  tags: [os, shell, path]
+
+- name: "Shell | root PATH — Sichere PATH-Definition in /root/.bashrc"
+  ansible.builtin.blockinfile:
+    path: /root/.bashrc
+    block: |
+      # Ansible OS Hardening — sicherer root PATH (CIS 5.4.2.5)
+      PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      export PATH
+    marker: "# {mark} ANSIBLE MANAGED BLOCK — root-path"
+    create: true
+    owner: root
+    group: root
+    mode: "0600"
+  tags: [os, shell, path]
+
+- name: "Shell | root PATH — Sichere PATH-Definition in /root/.profile"
+  ansible.builtin.blockinfile:
+    path: /root/.profile
+    block: |
+      # Ansible OS Hardening — sicherer root PATH (CIS 5.4.2.5)
+      PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      export PATH
+    marker: "# {mark} ANSIBLE MANAGED BLOCK — root-path"
+    create: true
+    owner: root
+    group: root
+    mode: "0600"
+  tags: [os, shell, path]
+
+# ── .netrc und .forward entfernen ─────────────────────────────────────────────
+
+- name: "Shell | Suche .netrc Dateien in Home-Verzeichnissen (CIS 6.2.14)"
+  ansible.builtin.shell: |
+    find /home /root -maxdepth 2 -name ".netrc" -type f 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  register: shell_netrc_files
+  changed_when: false
+  tags: [os, shell, legacy]
+
+- name: "Shell | Entferne .netrc Dateien (Klartext-Passwörter)"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ shell_netrc_files.stdout_lines }}"
+  when:
+    - shell_netrc_files.stdout_lines | length > 0
+    - shell_remove_netrc | default(true)
+  tags: [os, shell, legacy]
+
+- name: "Shell | Suche .forward Dateien (Mail-Weiterleitungs-Risiko)"
+  ansible.builtin.shell: |
+    find /home /root -maxdepth 2 -name ".forward" -type f 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  register: shell_forward_files
+  changed_when: false
+  tags: [os, shell, legacy]
+
+- name: "Shell | Entferne .forward Dateien (CIS 6.2.15)"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ shell_forward_files.stdout_lines }}"
+  when:
+    - shell_forward_files.stdout_lines | length > 0
+    - shell_remove_forward | default(true)
+  tags: [os, shell, legacy]
+
+- name: "Shell | Suche .rhosts Dateien (Legacy r-Befehle)"
+  ansible.builtin.shell: |
+    find /home /root -maxdepth 2 -name ".rhosts" -type f 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  register: shell_rhosts_files
+  changed_when: false
+  tags: [os, shell, legacy]
+
+- name: "Shell | Entferne .rhosts Dateien"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ shell_rhosts_files.stdout_lines }}"
+  when: shell_rhosts_files.stdout_lines | length > 0
+  tags: [os, shell, legacy]
+
+# ── /etc/shells absichern ─────────────────────────────────────────────────────
+
+- name: "Shell | Prüfe /etc/shells auf nicht-existierende Shells"
+  ansible.builtin.shell: |
+    while IFS= read -r shell; do
+      [[ "$shell" =~ ^# ]] && continue
+      [[ -z "$shell" ]] && continue
+      [ ! -f "$shell" ] && echo "UNGÜLTIG: $shell"
+    done < /etc/shells || true
+  args:
+    executable: /bin/bash
+  register: shell_invalid_shells
+  changed_when: false
+  tags: [os, shell, shells]
+
+- name: "Shell | WARNUNG — Ungültige Shells in /etc/shells"
+  ansible.builtin.debug:
+    msg: "⚠️  Ungültige Einträge in /etc/shells:\n{{ shell_invalid_shells.stdout }}"
+  when: shell_invalid_shells.stdout != ""
+  tags: [os, shell, shells]
+
+# ── Bash-History absichern ────────────────────────────────────────────────────
+
+- name: "Shell | Bash-History Einstellungen für alle User deployen"
+  ansible.builtin.copy:
+    content: |
+      # ==========================================================
+      # Bash-History Härtung — Ansible OS Hardening
+      # ==========================================================
+      # History in Datei schreiben (nicht nur im Speicher)
+      HISTFILE=~/.bash_history
+      # Max. 10000 Zeilen in der History-Datei
+      HISTFILESIZE={{ shell_histfilesize }}
+      # Max. 1000 Zeilen im RAM
+      HISTSIZE={{ shell_histsize }}
+      # Timestamps in History
+      HISTTIMEFORMAT="%Y-%m-%d %H:%M:%S "
+      # Duplikate und Leerzeichen-Kommandos nicht speichern
+      HISTCONTROL=ignoredups:erasedups
+      # History bei Session-Ende appenden statt überschreiben
+      shopt -s histappend
+      # Nach jedem Befehl sofort in Datei schreiben
+      PROMPT_COMMAND="history -a${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+      export HISTFILE HISTFILESIZE HISTSIZE HISTTIMEFORMAT HISTCONTROL
+    dest: /etc/profile.d/99-hardening-history.sh
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [os, shell, history]
+
+# ── Zusammenfassung ───────────────────────────────────────────────────────────
+
+- name: "Shell | Zusammenfassung"
+  ansible.builtin.debug:
+    msg:
+      - "============================================="
+      - "  Shell-Härtung abgeschlossen"
+      - "============================================="
+      - "  TMOUT:         {{ shell_tmout_seconds }}s"
+      - "  .netrc entf.:  {{ shell_netrc_files.stdout_lines | length }} Dateien"
+      - "  .forward entf.:{{ shell_forward_files.stdout_lines | length }} Dateien"
+      - "  .rhosts entf.: {{ shell_rhosts_files.stdout_lines | length }} Dateien"
+      - "  PATH sicher:   {{ 'ja' if 'OK:' in shell_path_check.stdout else 'PRÜFEN!' }}"
+      - "============================================="
+  tags: [os, shell, summary]

@@ -1,0 +1,29 @@
+# =============================================================================
+# /etc/fail2ban/jail.d/hardening.conf
+# Generiert von Ansible OS Hardening Role
+# =============================================================================
+
+[DEFAULT]
+bantime  = {{ os_fail2ban_bantime }}
+findtime = {{ os_fail2ban_findtime }}
+maxretry = {{ os_fail2ban_maxretry }}
+backend  = systemd
+banaction = iptables-multiport
+
+# Eigene IPs niemals sperren (durch Komma trennen)
+ignoreip = 127.0.0.1/8 ::1
+
+[sshd]
+enabled  = true
+port     = {{ ssh_port | default(22) }}
+filter   = sshd
+logpath  = /var/log/auth.log
+maxretry = {{ os_fail2ban_maxretry }}
+
+[sshd-ddos]
+enabled  = true
+port     = {{ ssh_port | default(22) }}
+filter   = sshd-ddos
+logpath  = /var/log/auth.log
+maxretry = 10
+findtime = 30

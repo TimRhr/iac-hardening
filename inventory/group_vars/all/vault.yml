@@ -1,0 +1,58 @@
+---
+# =============================================================================
+# inventory/group_vars/all/vault.yml
+# Ansible Vault — Verschlüsselte Secrets
+#
+# Diese Datei wird mit Ansible Vault verschlüsselt:
+#   ansible-vault encrypt inventory/group_vars/all/vault.yml
+#
+# Bearbeiten:
+#   ansible-vault edit inventory/group_vars/all/vault.yml
+#
+# Entschlüsseln (temporär):
+#   ansible-vault decrypt inventory/group_vars/all/vault.yml
+#
+# Playbook ausführen:
+#   ansible-playbook playbooks/hardening/site.yml --vault-password-file .vault_pass
+#   oder:
+#   ansible-playbook playbooks/hardening/site.yml --ask-vault-pass
+# =============================================================================
+
+# ── SSH / Deploy ──────────────────────────────────────────────────────────────
+# Passphrase für den generierten SSH-Deploy-Key (leer = keine Passphrase)
+vault_ssh_key_passphrase: ""
+
+# ── Remote-Syslog TLS ────────────────────────────────────────────────────────
+# Inhalt des CA-Zertifikats für TLS-Verbindung zum Syslog-Server
+# (nur nötig wenn syslog_remote_protocol: tls)
+vault_syslog_tls_ca_cert: |
+  -----BEGIN CERTIFICATE-----
+  # Hier PEM-Inhalt des CA-Zertifikats einfügen
+  -----END CERTIFICATE-----
+
+vault_syslog_tls_client_cert: |
+  -----BEGIN CERTIFICATE-----
+  # Hier PEM-Inhalt des Client-Zertifikats einfügen
+  -----END CERTIFICATE-----
+
+vault_syslog_tls_client_key: |
+  -----BEGIN PRIVATE KEY-----
+  # Hier PEM-Inhalt des Client-Keys einfügen
+  -----END PRIVATE KEY-----
+
+# ── AIDE Alerting ─────────────────────────────────────────────────────────────
+# E-Mail für AIDE-Filesystem-Änderungs-Alerts
+vault_aide_alert_mail: ""
+
+# ── Bootloader ────────────────────────────────────────────────────────────────
+# GRUB-Passwort (Klartext — wird beim Deploy zu PBKDF2-Hash)
+# WICHTIG: Starkes Passwort verwenden!
+vault_bootloader_grub_password: ""
+
+# ── sudo / PAM ────────────────────────────────────────────────────────────────
+# Falls ein zentrales sudo-Passwort für den Deploy-User nötig ist
+vault_deploy_become_password: ""
+
+# ── Monitoring / Alerts ───────────────────────────────────────────────────────
+# Webhook-URL für Slack/Teams/Mattermost Alerts (AIDE, fail2ban, etc.)
+vault_alert_webhook_url: ""

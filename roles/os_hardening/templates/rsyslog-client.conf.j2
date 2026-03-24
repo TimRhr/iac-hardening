@@ -1,0 +1,95 @@
+# =============================================================================
+# /etc/rsyslog.d/10-remote-client.conf
+# Generiert von Ansible OS Hardening Role
+# BSI OPS.1.1.5 — Remote-Syslog-Client mit Disk-Queue
+# WARNUNG: Wird bei Ansible-Run überschrieben!
+#
+# Protokoll: {{ syslog_remote_protocol | upper }}
+# Ziel:      {{ syslog_remote_host }}:{{ syslog_remote_port }}
+# =============================================================================
+
+{% if syslog_remote_protocol == 'tls' %}
+# ── TLS-Modul laden ───────────────────────────────────────────────────────────
+module(load="omfwd")
+module(load="gtls" driver.CAFile="{{ syslog_tls_cert_dir }}/ca.pem"
+{% if syslog_tls_client_cert | default('') != '' %}
+       driver.CertFile="{{ syslog_tls_cert_dir }}/client-cert.pem"
+       driver.KeyFile="{{ syslog_tls_cert_dir }}/client-key.pem"
+{% endif %}
+)
+{% endif %}
+
+# ── Action Queue: puffert Logs bei Verbindungsunterbrechung ───────────────────
+# BSI OPS.1.1.5: Kein Datenverlust bei temporärer Nichterreichbarkeit
+#
+# Disk-Queue schreibt ungesendete Logs auf Disk — überlebt rsyslog-Restart
+# und kurze Netzwerkausfälle ohne Datenverlust.
+
+action(
+  type="omfwd"
+  name="remote_syslog_forward"
+
+  # ── Verbindung ──────────────────────────────────────────────────────────────
+  Target="{{ syslog_remote_host }}"
+  Port="{{ syslog_remote_port }}"
+{% if syslog_remote_protocol == 'tls' %}
+  Protocol="tcp"
+  StreamDriver="gtls"
+  StreamDriverMode="1"
+  StreamDriverAuthMode="{{ syslog_tls_auth_mode }}"
+{% elif syslog_remote_protocol == 'tcp' %}
+  Protocol="tcp"
+{% else %}
+  Protocol="udp"
+{% endif %}
+
+  # ── Nachrichtenformat ───────────────────────────────────────────────────────
+  # RFC-5424 für strukturierte, maschinenlesbare Logs (BSI empfohlen)
+  Template="RFC5424"
+
+  # ── Disk-Assisted Queue ─────────────────────────────────────────────────────
+  # Typ: linkedList im RAM, überlaufende Nachrichten auf Disk
+  queue.type="LinkedList"
+  queue.filename="remote_syslog_queue"        # Dateiname unter workDirectory
+  queue.maxdiskspace="{{ syslog_queue_max_disk }}"
+  queue.size="{{ syslog_queue_max_messages }}"
+  queue.saveOnShutdown="on"                   # Queue bei Shutdown sichern
+  queue.discardmark="{{ syslog_queue_discard_mark }}"
+  queue.discardseverity="8"                   # Verwarf nur Debug bei Überlauf
+
+  # ── Retry-Verhalten ─────────────────────────────────────────────────────────
+  # Bei Verbindungsfehler: bis zu X mal wiederholen
+  action.resumeRetryCount="{{ syslog_remote_retry_count }}"
+  action.resumeInterval="{{ syslog_remote_retry_interval }}"
+
+  # Verbindungs-Timeout
+  tcp.keepAlive="on"
+  tcp.keepAlive.probes="3"
+  tcp.keepAlive.time="60"
+  tcp.keepAlive.intvl="10"
+)
+
+# ── Selektive Weiterleitung (Filter) ─────────────────────────────────────────
+# Standard: alles ab info-Level weiterleiten
+# Anpassbar über syslog_remote_filter in group_vars/host_vars
+
+{% if syslog_remote_filter | default('*.*') != '*.*' %}
+# Nur gefilterte Nachrichten weiterleiten
+{{ syslog_remote_filter }}   action(type="omfwd" target="{{ syslog_remote_host }}"
+    port="{{ syslog_remote_port }}"
+{% if syslog_remote_protocol == 'tcp' %}
+    protocol="tcp"
+{% else %}
+    protocol="udp"
+{% endif %}
+    template="RFC5424")
+& stop
+{% endif %}
+
+# ── Logging der Queue-Statistiken ────────────────────────────────────────────
+# Hilft bei Kapazitätsplanung und Fehlererkennung
+module(load="impstats"
+  interval="300"
+  severity="7"
+  log.syslog="on"
+  log.file="{{ syslog_stats_log_file }}")

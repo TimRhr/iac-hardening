@@ -1,0 +1,40 @@
+---
+# =============================================================================
+# playbooks/hardening/ssh_only.yml — Nur SSH-Härtung
+#
+# VERWENDUNG:
+#   ansible-playbook playbooks/hardening/ssh_only.yml
+#   ansible-playbook playbooks/hardening/ssh_only.yml --tags keygen
+#   ansible-playbook playbooks/hardening/ssh_only.yml --tags verify
+# =============================================================================
+
+- name: "Bootstrap | Python sicherstellen"
+  hosts: all
+  gather_facts: false
+  become: true
+  tags: [always]
+  tasks:
+    - ansible.builtin.raw: |
+        test -e /usr/bin/python3 || (apt-get update -qq && apt-get install -y python3)
+      changed_when: false
+
+- name: "🔐 SSH Hardening"
+  hosts: all
+  become: true
+  gather_facts: true
+  pre_tasks:
+    - ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0700"
+      loop:
+        - "{{ playbook_dir }}/../../ssh_keys"
+        - "{{ playbook_dir }}/../../ssh_keys/backups"
+        - "{{ playbook_dir }}/../../reports"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      tags: [always]
+  roles:
+    - role: ssh_hardening
+      tags: [ssh, hardening]

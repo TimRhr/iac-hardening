@@ -1,0 +1,116 @@
+---
+# =============================================================================
+# SSH Hardening | Task-Datei: Audit & Compliance Report
+# Erstellt nach dem Hardening einen strukturierten Bericht pro Host.
+# =============================================================================
+
+- name: "Audit | Sammle SSH-Konfigurations-Facts"
+  ansible.builtin.slurp:
+    src: /etc/ssh/sshd_config
+  register: audit_sshd_config
+  tags: [ssh, audit]
+
+- name: "Audit | Prüfe aktive Ciphers via ssh -Q"
+  ansible.builtin.command: ssh -Q cipher
+  changed_when: false
+  register: audit_ciphers
+  tags: [ssh, audit]
+
+- name: "Audit | Prüfe aktive MACs via ssh -Q"
+  ansible.builtin.command: ssh -Q mac
+  changed_when: false
+  register: audit_macs
+  tags: [ssh, audit]
+
+- name: "Audit | Prüfe authorized_keys für Deploy-User"
+  ansible.builtin.stat:
+    path: "/home/{{ ssh_deploy_user }}/.ssh/authorized_keys"
+  register: audit_authkeys_stat
+  tags: [ssh, audit]
+
+- name: "Audit | Zähle hinterlegte Public Keys"
+  ansible.builtin.command:
+    cmd: "wc -l /home/{{ ssh_deploy_user }}/.ssh/authorized_keys"
+  changed_when: false
+  failed_when: false
+  register: audit_key_count
+  tags: [ssh, audit]
+
+- name: "Audit | Prüfe sshd_config Dateiberechtigungen"
+  ansible.builtin.stat:
+    path: /etc/ssh/sshd_config
+  register: audit_sshd_stat
+  tags: [ssh, audit]
+
+- name: "Audit | Erstelle lokales Reports-Verzeichnis"
+  ansible.builtin.file:
+    path: "{{ ssh_report_dir }}"
+    state: directory
+    mode: "0750"
+  delegate_to: localhost
+  become: false
+  tags: [ssh, audit]
+
+- name: "Audit | Schreibe Compliance-Report (lokal)"
+  ansible.builtin.copy:
+    content: |
+      ================================================================
+      SSH HARDENING COMPLIANCE REPORT
+      ================================================================
+      Host:          {{ inventory_hostname }} ({{ ansible_host }})
+      Datum:         {{ ansible_date_time.iso8601 }}
+      OS:            {{ ansible_distribution }} {{ ansible_distribution_version }}
+      ----------------------------------------------------------------
+      KONFIGURATION
+      ----------------------------------------------------------------
+      SSH Port:                 {{ ssh_port }}
+      Root Login:               {{ ssh_permit_root_login }}
+      Passwort-Auth:            {{ ssh_password_authentication }}
+      PubKey-Auth:              {{ ssh_pubkey_authentication }}
+      MaxAuthTries:             {{ ssh_max_auth_tries }}
+      MaxSessions:              {{ ssh_max_sessions }}
+      Login Grace Time:         {{ ssh_login_grace_time }}s
+      Idle Timeout:             {{ ssh_client_alive_interval }}s × {{ ssh_client_alive_count_max }}
+      X11 Forwarding:           {{ ssh_x11_forwarding }}
+      Agent Forwarding:         {{ ssh_agent_forwarding }}
+      TCP Forwarding:           {{ ssh_tcp_forwarding }}
+      Kompression:              {{ ssh_compression }}
+      Log Level:                {{ ssh_log_level }}
+      ----------------------------------------------------------------
+      KRYPTOGRAPHIE
+      ----------------------------------------------------------------
+      Ciphers:
+      {% for c in ssh_ciphers %}        - {{ c }}
+      {% endfor %}
+      MACs:
+      {% for m in ssh_macs %}        - {{ m }}
+      {% endfor %}
+      KexAlgorithms:
+      {% for k in ssh_kex_algorithms %}        - {{ k }}
+      {% endfor %}
+      ----------------------------------------------------------------
+      KEY MANAGEMENT
+      ----------------------------------------------------------------
+      Deploy User:              {{ ssh_deploy_user }}
+      AuthorizedKeys:           {{ '/home/' + ssh_deploy_user + '/.ssh/authorized_keys' }}
+      Keys hinterlegt:          {{ audit_key_count.stdout | default('unbekannt') }}
+      ----------------------------------------------------------------
+      DATEIBERECHTIGUNGEN
+      ----------------------------------------------------------------
+      sshd_config Mode:         {{ audit_sshd_stat.stat.mode }}
+      sshd_config Owner:        {{ audit_sshd_stat.stat.pw_name }}
+      ----------------------------------------------------------------
+      VERIFIKATION
+      ----------------------------------------------------------------
+      SSH-Login-Test:           {{ '✅ BESTANDEN' if ssh_verify_success | default(false) else '❌ NICHT GETESTET' }}
+      ================================================================
+    dest: "{{ ssh_report_dir }}/{{ inventory_hostname }}_ssh_report_{{ ansible_date_time.date }}.txt"
+    mode: "0640"
+  delegate_to: localhost
+  become: false
+  tags: [ssh, audit]
+
+- name: "Audit | Report-Pfad anzeigen"
+  ansible.builtin.debug:
+    msg: "📋 Compliance-Report gespeichert: {{ ssh_report_dir }}/{{ inventory_hostname }}_ssh_report_{{ ansible_date_time.date }}.txt"
+  tags: [ssh, audit]

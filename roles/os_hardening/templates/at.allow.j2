@@ -1,0 +1,9 @@
+# =============================================================================
+# /etc/at.allow — Whitelist für erlaubte at-Nutzer
+# Generiert von Ansible OS Hardening Role (BSI SYS.1.3 / CIS 5.1)
+# NUR die hier aufgeführten User dürfen at nutzen.
+# =============================================================================
+root
+{% for user in cron_allow_users %}
+{{ user }}
+{% endfor %}

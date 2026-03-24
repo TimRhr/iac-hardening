@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# =============================================================================
+# /usr/local/lib/aide/aide-check.sh
+# Generiert von Ansible OS Hardening Role
+# AIDE Integritäts-Check Wrapper mit Alert-Integration
+# =============================================================================
+set -euo pipefail
+
+AIDE_CONF="/etc/aide/aide.conf"
+DB_DIR="{{ aide_db_dir }}"
+LOG_DIR="{{ aide_log_dir }}"
+ALERT_SCRIPT="/usr/local/lib/aide/aide-alert.sh"
+HOSTNAME="{{ inventory_hostname }}"
+DATE=$(date '+%Y-%m-%d_%H%M%S')
+REPORT_FILE="${LOG_DIR}/aide-report-${HOSTNAME}-${DATE}.log"
+LOCKFILE="/var/run/aide.lock"
+MODE="${1:-}"
+
+# ── Lock-Mechanismus (verhindert parallele Ausführung) ────────────────────────
+exec 9>"${LOCKFILE}"
+if ! flock -n 9; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] AIDE läuft bereits (lock: ${LOCKFILE})" >&2
+  exit 0
+fi
+trap 'rm -f "${LOCKFILE}"; exit' INT TERM EXIT
+
+log() {
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+}
+
+# ── Voraussetzungen prüfen ────────────────────────────────────────────────────
+if [ ! -f "${DB_DIR}/aide.db.gz" ]; then
+  log "FEHLER: AIDE-Datenbank nicht gefunden: ${DB_DIR}/aide.db.gz"
+  "${ALERT_SCRIPT}" "FEHLER" "AIDE-Datenbank fehlt auf ${HOSTNAME}" "" || true
+  exit 1
+fi
+
+if [ ! -f "${AIDE_CONF}" ]; then
+  log "FEHLER: AIDE-Konfiguration nicht gefunden: ${AIDE_CONF}"
+  exit 1
+fi
+
+# ── DB-Alter prüfen ───────────────────────────────────────────────────────────
+DB_AGE=$(( ( $(date +%s) - $(stat -c %Y "${DB_DIR}/aide.db.gz") ) / 86400 ))
+log "Datenbank-Alter: ${DB_AGE} Tage"
+
+if [ "${DB_AGE}" -gt "{{ aide_db_max_age_days }}" ]; then
+  log "WARNUNG: AIDE-Datenbank ist ${DB_AGE} Tage alt (Limit: {{ aide_db_max_age_days }} Tage)"
+  "${ALERT_SCRIPT}" "WARNUNG" \
+    "AIDE-DB auf ${HOSTNAME} ist ${DB_AGE} Tage alt — bitte aktualisieren" \
+    "" || true
+fi
+
+# ── Check oder Update ─────────────────────────────────────────────────────────
+if [ "${MODE}" = "--update" ]; then
+  log "Starte AIDE DB-Update..."
+  aide --config="${AIDE_CONF}" --update > "${REPORT_FILE}" 2>&1
+  RC=$?
+  
+  if [ -f "${DB_DIR}/aide.db.new.gz" ]; then
+    # Alte DB sichern
+    cp "${DB_DIR}/aide.db.gz" \
+       "${DB_DIR}/aide.db.$(date +%Y%m%d_%H%M%S).bak"
+    # Neue DB aktivieren
+    mv "${DB_DIR}/aide.db.new.gz" "${DB_DIR}/aide.db.gz"
+    chmod 400 "${DB_DIR}/aide.db.gz"
+    log "Datenbank wurde aktualisiert"
+  fi
+else
+  log "Starte AIDE Integritäts-Check..."
+  aide --config="${AIDE_CONF}" --check > "${REPORT_FILE}" 2>&1
+  RC=$?
+fi
+
+log "AIDE beendet mit RC=${RC}"
+
+# ── Return-Code auswerten (AIDE Bit-Flags) ────────────────────────────────────
+# Bit 0 (1):  Neue Dateien
+# Bit 1 (2):  Entfernte Dateien
+# Bit 2 (4):  Geänderte Dateien
+# Bit 3 (8):  Fehler beim Check
+# Bit 4 (16): Fehler beim Schreiben des Reports
+
+SUMMARY=""
+SEVERITY="OK"
+
+if (( RC & 8 )); then
+  SEVERITY="FEHLER"
+  SUMMARY="${SUMMARY}[FEHLER] AIDE Check-Fehler aufgetreten. "
+fi
+if (( RC & 4 )); then
+  SEVERITY="KRITISCH"
+  SUMMARY="${SUMMARY}[KRITISCH] Dateien wurden VERÄNDERT! "
+  CHANGED=$(grep -c "^[MCE]" "${REPORT_FILE}" 2>/dev/null || echo "?")
+  SUMMARY="${SUMMARY}(${CHANGED} Änderungen) "
+fi
+if (( RC & 2 )); then
+  [ "${SEVERITY}" = "OK" ] && SEVERITY="WARNUNG"
+  SUMMARY="${SUMMARY}[WARNUNG] Dateien wurden ENTFERNT. "
+fi
+if (( RC & 1 )); then
+  [ "${SEVERITY}" = "OK" ] && SEVERITY="INFO"
+  SUMMARY="${SUMMARY}[INFO] Neue Dateien gefunden. "
+fi
+if [ "${RC}" -eq 0 ]; then
+  SUMMARY="Keine Änderungen gefunden — System integer."
+fi
+
+log "Ergebnis: ${SEVERITY} — ${SUMMARY}"
+
+# ── Alert senden wenn Änderungen gefunden ─────────────────────────────────────
+if [ "${RC}" -ne 0 ] && [ -x "${ALERT_SCRIPT}" ]; then
+  "${ALERT_SCRIPT}" "${SEVERITY}" "${SUMMARY}" "${REPORT_FILE}" || true
+fi
+
+# ── Alte Reports aufräumen (> {{ aide_report_keep_days }} Tage) ───────────────
+find "${LOG_DIR}" -name "aide-report-*.log" \
+  -mtime +"{{ aide_report_keep_days }}" \
+  -delete 2>/dev/null || true
+
+# ── Letzten Check-Timestamp sichern ──────────────────────────────────────────
+echo "${DATE} RC=${RC} ${SEVERITY}" > "${LOG_DIR}/aide-last-check.txt"
+
+log "Report gespeichert: ${REPORT_FILE}"
+exit ${RC}

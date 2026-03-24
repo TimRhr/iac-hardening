@@ -1,0 +1,129 @@
+# =============================================================================
+# /etc/rsyslog.conf
+# Generiert von Ansible OS Hardening Role
+# BSI OPS.1.1.5 · CIS 6.2 — Zentrale Syslog-Konfiguration
+# WARNUNG: Wird bei Ansible-Run überschrieben!
+# =============================================================================
+
+# ── Module laden ──────────────────────────────────────────────────────────────
+
+# Kernel-Logs
+module(load="imklog" permitnonkernelfacility="on")
+
+# Systemd-Journal als Input (bevorzugt gegenüber imuxsock)
+module(load="imjournal"
+       StateFile="/var/spool/rsyslog/imjournal.state"
+       IgnorePreviousMessages="off"
+       RateLimit.Interval="{{ syslog_rsyslog_rate_interval }}"
+       RateLimit.Burst="{{ syslog_rsyslog_rate_burst }}")
+
+# UNIX-Socket (Fallback / Legacy-Apps)
+module(load="imuxsock"
+       SysSock.Use="on"
+       SysSock.RateLimit.Interval="{{ syslog_rsyslog_rate_interval }}"
+       SysSock.RateLimit.Burst="{{ syslog_rsyslog_rate_burst }}")
+
+{% if syslog_server_enabled | default(false) %}
+# ── Server-Module (nur wenn Server-Modus aktiv) ───────────────────────────────
+{% if syslog_server_protocol == 'udp' %}
+module(load="imudp")
+input(type="imudp" port="{{ syslog_server_port }}" ruleset="RemoteServer")
+{% endif %}
+{% if syslog_server_protocol in ['tcp', 'tls'] %}
+module(load="imtcp")
+input(type="imtcp" port="{{ syslog_server_port }}" ruleset="RemoteServer")
+{% endif %}
+{% endif %}
+
+# ── Globale Direktiven ────────────────────────────────────────────────────────
+global(
+  # Spoolverzeichnis für Queue-Persistenz bei Verbindungsunterbrechung
+  workDirectory="/var/spool/rsyslog"
+
+  # Maximale Nachrichtengröße (BSI: keine Kürzung)
+  maxMessageSize="64k"
+
+  # Eigener Hostname in Logs (kein FQDN-Lookup, der verfälschen kann)
+  localHostname="{{ inventory_hostname }}"
+
+  # Puffer für Queue
+  action.reportSuspension="on"
+  action.reportSuspensionContinuation="on"
+)
+
+# ── Spool-Verzeichnis sicherstellen ───────────────────────────────────────────
+# Wird in tasks/logging.yml angelegt
+
+# ── Templates ─────────────────────────────────────────────────────────────────
+
+# RFC-5424 Format (strukturiert, BSI empfohlen)
+template(name="RFC5424"
+  type="string"
+  string="<%PRI%>1 %TIMESTAMP:::date-rfc3339% %HOSTNAME% %APP-NAME% %PROCID% %MSGID% %STRUCTURED-DATA% %msg%\n")
+
+# RFC-3164 Format (Legacy-kompatibel)
+template(name="RFC3164"
+  type="string"
+  string="<%PRI%>%TIMESTAMP% %HOSTNAME% %syslogtag%%msg:::sp-if-no-1st-sp%%msg%\n")
+
+# Dateiformat mit Zeitzone (lokal)
+template(name="LocalFormat"
+  type="string"
+  string="%TIMESTAMP:::date-rfc3339% %HOSTNAME% %syslogtag%%msg:::sp-if-no-1st-sp%%msg%\n")
+
+{% if syslog_server_enabled | default(false) %}
+# Template für empfangene Remote-Logs (nach Host sortiert)
+template(name="RemoteHostLog"
+  type="string"
+  string="{{ syslog_server_log_dir }}/%HOSTNAME%/%PROGRAMNAME:::secpath-replace%.log")
+
+template(name="RemoteHostLogDaily"
+  type="string"
+  string="{{ syslog_server_log_dir }}/%HOSTNAME%/%$YEAR%-%$MONTH%-%$DAY%/%PROGRAMNAME:::secpath-replace%.log")
+{% endif %}
+
+# ── Regelwerk — Lokal schreiben ───────────────────────────────────────────────
+ruleset(name="LocalLogging") {
+
+  # Authentifizierung (SSH, sudo, PAM) — BSI: separat und vollständig
+  auth,authpriv.*                                          /var/log/auth.log
+
+  # Kern-Nachrichten
+  kern.*                                                   /var/log/kern.log
+
+  # Allgemeines Syslog
+  *.info;mail.none;authpriv.none;cron.none                 /var/log/syslog
+
+  # Mail-Subsystem
+  mail.*                                                   /var/log/mail.log
+
+  # Cron-Daemon
+  cron.*                                                   /var/log/cron.log
+
+  # Notfälle an alle Terminals
+  *.emerg                                                  :omusrmsg:*
+
+  # Debug (auskommentiert — nur bei Bedarf)
+  # *.debug                                                /var/log/debug.log
+}
+
+{% if syslog_server_enabled | default(false) %}
+# ── Regelwerk — Empfangene Remote-Logs schreiben ──────────────────────────────
+ruleset(name="RemoteServer") {
+  # Jeder Host bekommt sein eigenes Verzeichnis
+  action(type="omfile"
+    DynaFile="RemoteHostLogDaily"
+    template="RFC5424"
+    FileOwner="root"
+    FileGroup="root"
+    FileCreateMode="0640"
+    DirOwner="root"
+    DirGroup="root"
+    DirCreateMode="0750"
+    closeTimeout="10")
+}
+{% endif %}
+
+# ── Lokale Regeln einbinden ───────────────────────────────────────────────────
+# Reihenfolge wichtig: 00-server.conf (Server) → 10-remote-client.conf (Client)
+$IncludeConfig /etc/rsyslog.d/*.conf

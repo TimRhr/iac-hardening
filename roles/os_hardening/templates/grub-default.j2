@@ -1,0 +1,38 @@
+# =============================================================================
+# /etc/default/grub
+# Generiert von Ansible OS Hardening Role
+# BSI SYS.1.3.A5 · CIS 1.4
+# =============================================================================
+
+# Standard-Menüeintrag (0 = erster Eintrag)
+GRUB_DEFAULT=0
+
+# Kein Timeout-Menü — direkt booten (Sicherheit: kein interaktives Menü)
+GRUB_TIMEOUT={{ bootloader_grub_timeout }}
+GRUB_TIMEOUT_STYLE=hidden
+
+# Kernel-Parameter
+# apparmor=1 security=apparmor — MAC aktivieren
+# quiet splash — minimale Ausgabe (verhindert Info-Leakage in Logs)
+# vsyscall=none — vsyscall-Page deaktivieren (Exploit-Mitigation)
+# page_poison=1 — Speicherseiten nach Free vergiften (Use-after-Free)
+# pti=on — Kernel Page Table Isolation (Meltdown-Schutz)
+# slab_nomerge — Slab-Merging deaktivieren (Heap-Exploitation erschweren)
+# init_on_alloc=1 — Speicher bei Allokation nullen
+# init_on_free=1 — Speicher bei Freigabe nullen
+GRUB_CMDLINE_LINUX_DEFAULT="{{ bootloader_cmdline_default }}"
+GRUB_CMDLINE_LINUX="apparmor=1 security=apparmor {{ bootloader_extra_kernel_params }}"
+
+# Recovery-Mode deaktivieren (verhindert passwortlosen root-Zugang)
+{% if bootloader_disable_recovery %}
+GRUB_DISABLE_RECOVERY=true
+{% endif %}
+
+# OS-Prober deaktivieren (kein Auto-Detect anderer Betriebssysteme)
+GRUB_DISABLE_OS_PROBER={{ 'true' if bootloader_disable_os_prober else 'false' }}
+
+# Terminal-Ausgabe
+GRUB_TERMINAL=console
+
+# Distributor
+GRUB_DISTRIBUTOR="$(lsb_release -i -s 2>/dev/null || echo Debian)"

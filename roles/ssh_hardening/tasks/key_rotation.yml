@@ -1,0 +1,252 @@
+---
+# =============================================================================
+# roles/ssh_hardening/tasks/key_rotation.yml
+# SSH-Key-Rotation mit Übergangsphase
+# BSI SYS.1.3.A4 — Crypto-Hygiene
+#
+# Ablauf (sicher, kein Ausschluss-Risiko):
+#   1. Ablauf prüfen — Key überhaupt alt genug?
+#   2. Neuen Key generieren (parallel zum alten)
+#   3. BEIDE Keys als authorized_keys hinterlegen (Übergangsphase)
+#   4. SSH-Login mit neuem Key verifizieren
+#   5. Alten Key erst DANN aus authorized_keys entfernen
+#   6. Alten Key archivieren (nicht löschen)
+#   7. Report + Audit-Log
+# =============================================================================
+
+# ── 1. Prüfe ob Rotation nötig ────────────────────────────────────────────────
+
+- name: "Key-Rotation | Prüfe Alter des aktuellen Keys"
+  ansible.builtin.stat:
+    path: "{{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519"
+  register: rotation_current_key_stat
+  delegate_to: localhost
+  become: false
+  tags: [ssh, rotation]
+
+- name: "Key-Rotation | Key-Alter berechnen (Tage)"
+  ansible.builtin.set_fact:
+    rotation_key_age_days: >-
+      {{
+        ((ansible_date_time.epoch | int) -
+         (rotation_current_key_stat.stat.mtime | default(0) | int)) // 86400
+      }}
+  when: rotation_current_key_stat.stat.exists | default(false)
+  tags: [ssh, rotation]
+
+- name: "Key-Rotation | Alter anzeigen"
+  ansible.builtin.debug:
+    msg: >-
+      Key-Alter: {{ rotation_key_age_days | default('kein Key') }} Tage
+      (Rotation nach {{ ssh_key_rotation_days }} Tagen,
+      erzwungen: {{ ssh_key_rotate | default(false) }})
+  tags: [ssh, rotation]
+
+- name: "Key-Rotation | Rotation erforderlich? (Fact setzen)"
+  ansible.builtin.set_fact:
+    rotation_needed: >-
+      {{
+        (not (rotation_current_key_stat.stat.exists | default(false)))
+        or (ssh_key_rotate | default(false) | bool)
+        or ((rotation_key_age_days | default(0) | int) >= (ssh_key_rotation_days | int))
+      }}
+  tags: [ssh, rotation]
+
+- name: "Key-Rotation | Überspringe Rotation (Key noch aktuell)"
+  ansible.builtin.debug:
+    msg: >-
+      ✅ Key ist {{ rotation_key_age_days | default(0) }} Tage alt —
+      Rotation erst nach {{ ssh_key_rotation_days }} Tagen nötig. Übersprungen.
+  when: not rotation_needed
+  tags: [ssh, rotation]
+
+# ── 2. Neuen Key generieren ───────────────────────────────────────────────────
+
+- name: "Key-Rotation | Neues Key-Verzeichnis (dated)"
+  ansible.builtin.file:
+    path: "{{ ssh_key_local_dir }}/{{ inventory_hostname }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  when: rotation_needed
+  tags: [ssh, rotation]
+
+- name: "Key-Rotation | Neuen Ed25519-Key generieren"
+  community.crypto.openssh_keypair:
+    path: "{{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519.new"
+    type: ed25519
+    comment: "ansible-managed_{{ inventory_hostname }}_rotated_{{ ansible_date_time.date }}"
+    mode: "0600"
+    passphrase: "{{ ssh_key_passphrase | default('') }}"
+    force: true
+  delegate_to: localhost
+  become: false
+  when: rotation_needed
+  tags: [ssh, rotation]
+
+- name: "Key-Rotation | Neuen Public Key einlesen"
+  ansible.builtin.slurp:
+    src: "{{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519.new.pub"
+  register: rotation_new_pubkey
+  delegate_to: localhost
+  become: false
+  when: rotation_needed
+  tags: [ssh, rotation]
+
+- name: "Key-Rotation | Alten Public Key einlesen (für Übergangsphase)"
+  ansible.builtin.slurp:
+    src: "{{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519.pub"
+  register: rotation_old_pubkey
+  delegate_to: localhost
+  become: false
+  when:
+    - rotation_needed
+    - rotation_current_key_stat.stat.exists | default(false)
+  tags: [ssh, rotation]
+
+# ── 3. BEIDE Keys hinterlegen (Übergangsphase) ────────────────────────────────
+
+- name: "Key-Rotation | Neuen Key zu authorized_keys hinzufügen (Übergang)"
+  ansible.posix.authorized_key:
+    user: "{{ ssh_deploy_user }}"
+    key: "{{ rotation_new_pubkey.content | b64decode }}"
+    state: present
+    comment: "new-key-rotation-{{ ansible_date_time.date }}"
+  when: rotation_needed
+  tags: [ssh, rotation]
+
+- name: "Key-Rotation | ⏳ Übergangsphase — BEIDE Keys sind aktiv"
+  ansible.builtin.debug:
+    msg:
+      - "Alter und neuer Key sind BEIDE in authorized_keys aktiv."
+      - "Verifiziere jetzt Login mit neuem Key..."
+  when: rotation_needed
+  tags: [ssh, rotation]
+
+# ── 4. Login mit neuem Key verifizieren ──────────────────────────────────────
+
+- name: "Key-Rotation | Verifiziere Login mit neuem Key"
+  ansible.builtin.command: >-
+    ssh
+    -i {{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519.new
+    -o StrictHostKeyChecking=no
+    -o ConnectTimeout=10
+    -o BatchMode=yes
+    -p {{ ssh_port }}
+    {{ ssh_deploy_user }}@{{ ansible_host }}
+    "echo ROTATION_OK"
+  register: rotation_verify
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  ignore_errors: true
+  when: rotation_needed
+  tags: [ssh, rotation]
+
+- name: "Key-Rotation | ROLLBACK — Neuen Key entfernen (Login fehlgeschlagen)"
+  ansible.posix.authorized_key:
+    user: "{{ ssh_deploy_user }}"
+    key: "{{ rotation_new_pubkey.content | b64decode }}"
+    state: absent
+  when:
+    - rotation_needed
+    - "'ROTATION_OK' not in (rotation_verify.stdout | default(''))"
+  tags: [ssh, rotation]
+
+- name: "Key-Rotation | FEHLER — Rotation abgebrochen (alter Key bleibt aktiv)"
+  ansible.builtin.fail:
+    msg: |
+      ❌ SSH-Login mit neuem Key fehlgeschlagen!
+      Neuer Key wurde aus authorized_keys entfernt.
+      Alter Key bleibt unverändert aktiv.
+      Bitte neuen Key manuell prüfen:
+        ssh -i {{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519.new \
+            -p {{ ssh_port }} {{ ssh_deploy_user }}@{{ ansible_host }}
+  when:
+    - rotation_needed
+    - "'ROTATION_OK' not in (rotation_verify.stdout | default(''))"
+  tags: [ssh, rotation]
+
+# ── 5. Alten Key entfernen ────────────────────────────────────────────────────
+
+- name: "Key-Rotation | Alten Key aus authorized_keys entfernen"
+  ansible.posix.authorized_key:
+    user: "{{ ssh_deploy_user }}"
+    key: "{{ rotation_old_pubkey.content | b64decode }}"
+    state: absent
+  when:
+    - rotation_needed
+    - rotation_current_key_stat.stat.exists | default(false)
+    - "'ROTATION_OK' in (rotation_verify.stdout | default(''))"
+  tags: [ssh, rotation]
+
+# ── 6. Neuen Key aktivieren (umbenennen) ─────────────────────────────────────
+
+- name: "Key-Rotation | Alten Key archivieren"
+  ansible.builtin.copy:
+    src: "{{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519"
+    dest: "{{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519.retired.{{ ansible_date_time.date }}"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  when:
+    - rotation_needed
+    - rotation_current_key_stat.stat.exists | default(false)
+    - "'ROTATION_OK' in (rotation_verify.stdout | default(''))"
+  tags: [ssh, rotation]
+
+- name: "Key-Rotation | Neuen Key als aktiven Key setzen"
+  ansible.builtin.shell: |
+    mv "{{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519.new" \
+       "{{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519"
+    mv "{{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519.new.pub" \
+       "{{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519.pub"
+    chmod 600 "{{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519"
+  args:
+    executable: /bin/bash
+  delegate_to: localhost
+  become: false
+  when:
+    - rotation_needed
+    - "'ROTATION_OK' in (rotation_verify.stdout | default(''))"
+  tags: [ssh, rotation]
+
+# ── 7. Ablauf-Warnung für nächste Rotation ────────────────────────────────────
+
+- name: "Key-Rotation | Ablauf-Warnung in Metadaten schreiben"
+  ansible.builtin.copy:
+    content: |
+      # SSH Key Rotation Metadata — {{ inventory_hostname }}
+      rotated_at: {{ ansible_date_time.iso8601 }}
+      rotated_by: ansible
+      next_rotation: >-
+        {{ (ansible_date_time.date) }} + {{ ssh_key_rotation_days }} Tage
+      key_path: {{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519
+      user: {{ ssh_deploy_user }}
+      host: {{ ansible_host }}:{{ ssh_port }}
+    dest: "{{ ssh_key_local_dir }}/{{ inventory_hostname }}/rotation.yml"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  when:
+    - rotation_needed
+    - "'ROTATION_OK' in (rotation_verify.stdout | default(''))"
+  tags: [ssh, rotation]
+
+# ── 8. Zusammenfassung ────────────────────────────────────────────────────────
+
+- name: "Key-Rotation | ✅ Zusammenfassung"
+  ansible.builtin.debug:
+    msg:
+      - "============================================="
+      - "  SSH-Key-Rotation"
+      - "  BSI SYS.1.3.A4 · Crypto-Hygiene"
+      - "============================================="
+      - "  Host:           {{ inventory_hostname }}"
+      - "  Rotation:       {{ 'durchgeführt' if (rotation_needed and 'ROTATION_OK' in (rotation_verify.stdout | default(''))) else ('nicht nötig' if not rotation_needed else 'FEHLGESCHLAGEN') }}"
+      - "  Key-Alter:      {{ rotation_key_age_days | default('neu') }} Tage"
+      - "  Nächste:        in {{ ssh_key_rotation_days }} Tagen"
+      - "  Aktiver Key:    {{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519"
+      - "============================================="
+  tags: [ssh, rotation]

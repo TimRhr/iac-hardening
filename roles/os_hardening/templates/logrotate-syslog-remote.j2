@@ -1,0 +1,31 @@
+# =============================================================================
+# /etc/logrotate.d/syslog-remote
+# Generiert von Ansible OS Hardening Role
+# Log-Rotation für empfangene Remote-Syslog-Logs
+# =============================================================================
+
+{{ syslog_server_log_dir }}/*/*.log
+{{ syslog_server_log_dir }}/*/*/*.log {
+    daily
+    rotate {{ syslog_server_log_rotate_days }}
+    compress
+    delaycompress
+    missingok
+    notifempty
+    sharedscripts
+    create 0640 root root
+    postrotate
+        /usr/lib/rsyslog/rsyslog-rotate
+    endscript
+}
+
+# Kritische Alert-Datei länger aufbewahren
+{{ syslog_server_log_dir }}/CRITICAL.log {
+    weekly
+    rotate 104
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root root
+}

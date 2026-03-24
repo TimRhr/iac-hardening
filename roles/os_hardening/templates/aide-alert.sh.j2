@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# =============================================================================
+# /usr/local/lib/aide/aide-alert.sh
+# Generiert von Ansible OS Hardening Role
+# AIDE Alert-Handler: Syslog + Mail + optionaler Webhook
+# =============================================================================
+set -euo pipefail
+
+SEVERITY="${1:-UNBEKANNT}"
+MESSAGE="${2:-Kein Text}"
+REPORT_FILE="${3:-}"
+HOSTNAME="{{ inventory_hostname }}"
+DATE=$(date '+%Y-%m-%d %H:%M:%S')
+
+# Syslog
+case "${SEVERITY}" in
+  KRITISCH|FEHLER)  PRIORITY="security.alert"  ;;
+  WARNUNG)          PRIORITY="security.warning" ;;
+  *)                PRIORITY="security.notice"  ;;
+esac
+logger -t "aide" -p "${PRIORITY}" \
+  "AIDE ALERT [${SEVERITY}] auf ${HOSTNAME}: ${MESSAGE}"
+
+{% if aide_alert_mail | default('') != '' %}
+MAIL_TO="{{ aide_alert_mail }}"
+MAIL_FROM="{{ aide_alert_mail_from | default('aide-noreply@' + inventory_hostname) }}"
+MAIL_SUBJECT="[AIDE][${SEVERITY}] Filesystem-Aenderung auf {{ inventory_hostname }}"
+
+{
+  echo "From: ${MAIL_FROM}"
+  echo "To: ${MAIL_TO}"
+  echo "Subject: ${MAIL_SUBJECT}"
+  echo "Content-Type: text/plain; charset=utf-8"
+  echo ""
+  echo "AIDE Filesystem Integrity Alert"
+  echo "================================"
+  echo "Host:    ${HOSTNAME}"
+  echo "Zeit:    ${DATE}"
+  echo "Schwere: ${SEVERITY}"
+  echo ""
+  echo "Meldung: ${MESSAGE}"
+  echo ""
+  if [ -n "${REPORT_FILE}" ] && [ -f "${REPORT_FILE}" ]; then
+    echo "Betroffene Dateien:"
+    grep -E "^(Added|Removed|Changed|Entry|[FCE]).*:" \
+      "${REPORT_FILE}" 2>/dev/null | head -50 || true
+    echo ""
+    echo "Vollstaendiger Report: ${REPORT_FILE}"
+  fi
+  echo ""
+  echo "--- BSI SYS.1.3.A9 / CIS 6.1 ---"
+} | /usr/sbin/sendmail -t 2>/dev/null \
+  || mail -s "${MAIL_SUBJECT}" "${MAIL_TO}" < /dev/null 2>/dev/null || true
+{% endif %}
+
+{% if aide_webhook_url | default('') != '' %}
+case "${SEVERITY}" in
+  KRITISCH|FEHLER) COLOR="danger"  ;;
+  WARNUNG)         COLOR="warning" ;;
+  *)               COLOR="good"    ;;
+esac
+
+{% if aide_webhook_format | default('slack') == 'slack' %}
+PAYLOAD="{\"attachments\":[{\"color\":\"${COLOR}\",\"title\":\"AIDE [${SEVERITY}] ${HOSTNAME}\",\"text\":\"${MESSAGE}\",\"footer\":\"BSI SYS.1.3.A9\"}]}"
+{% else %}
+PAYLOAD="{\"severity\":\"${SEVERITY}\",\"host\":\"${HOSTNAME}\",\"time\":\"${DATE}\",\"message\":\"${MESSAGE}\",\"source\":\"aide\"}"
+{% endif %}
+
+curl -s -X POST "{{ aide_webhook_url }}" \
+  -H "Content-Type: application/json" \
+  -d "${PAYLOAD}" \
+  --max-time 10 --retry 2 2>/dev/null || true
+{% endif %}
+
+exit 0

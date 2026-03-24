@@ -1,0 +1,73 @@
+---
+# =============================================================================
+# OS Hardening | PAM — Passwort-Richtlinien & Account-Lockout
+# =============================================================================
+
+- name: "PAM | Backup der PAM-Konfiguration (einmalig)"
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ item }}.hardening-backup"
+    remote_src: true
+    force: false
+    mode: preserve
+  loop:
+    - /etc/pam.d/common-auth
+    - /etc/pam.d/common-password
+    - /etc/pam.d/common-account
+    - /etc/pam.d/su
+  failed_when: false
+  tags: [os, pam, backup]
+
+- name: "PAM | pwquality konfigurieren (Passwort-Komplexität)"
+  ansible.builtin.template:
+    src: pwquality.conf.j2
+    dest: /etc/security/pwquality.conf
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [os, pam, password]
+
+- name: "PAM | faillock.conf konfigurieren (Account-Lockout)"
+  ansible.builtin.template:
+    src: faillock.conf.j2
+    dest: /etc/security/faillock.conf
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [os, pam, lockout]
+
+- name: "PAM | pam-auth-update für faillock aktivieren (Debian/Ubuntu)"
+  ansible.builtin.command: pam-auth-update --enable faillock
+  changed_when: false
+  when: ansible_os_family == 'Debian'
+  tags: [os, pam, lockout]
+
+- name: "PAM | Passwort-Historie konfigurieren (keine Wiederverwendung)"
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-password
+    regexp: 'pam_pwhistory'
+    line: "password required pam_pwhistory.so remember={{ os_pam_pwhistory_remember }} use_authtok"
+    insertbefore: 'pam_unix'
+    state: present
+  when: ansible_os_family == 'Debian'
+  tags: [os, pam, password]
+
+- name: "PAM | su auf Gruppe sudo einschränken"
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/su
+    regexp: '^#?\s*auth\s+required\s+pam_wheel'
+    line: "auth required pam_wheel.so use_uid group=sudo"
+    state: present
+  tags: [os, pam, su]
+
+- name: "PAM | Prüfe faillock-Status (Gesperrte Accounts)"
+  ansible.builtin.command: faillock
+  register: faillock_status
+  changed_when: false
+  failed_when: false
+  tags: [os, pam, audit]
+
+- name: "PAM | faillock-Status anzeigen"
+  ansible.builtin.debug:
+    msg: "{{ faillock_status.stdout_lines | default(['Keine gesperrten Accounts']) }}"
+  tags: [os, pam, audit]

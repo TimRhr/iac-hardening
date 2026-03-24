@@ -1,0 +1,10 @@
+# =============================================================================
+# /etc/modprobe.d/hardening-blacklist.conf
+# Generiert von Ansible OS Hardening Role
+# WARNUNG: Wird bei jedem Ansible-Run überschrieben
+# =============================================================================
+
+{% for mod in os_kernel_modules_disable %}
+install {{ mod }} /bin/true
+blacklist {{ mod }}
+{% endfor %}

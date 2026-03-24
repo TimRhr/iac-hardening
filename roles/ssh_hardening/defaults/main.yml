@@ -1,0 +1,126 @@
+---
+# =============================================================================
+# SSH Hardening Role - Default Variables
+# =============================================================================
+# Alle Werte können in group_vars/ oder host_vars/ überschrieben werden
+
+# --- Allgemein ---------------------------------------------------------------
+ssh_port: 22                          # SSH Port (empfohlen: z.B. 2222 ändern)
+ssh_listen_address: "0.0.0.0"        # Auf welcher IP lauschen (0.0.0.0 = alle)
+
+# --- Authentifizierung -------------------------------------------------------
+ssh_permit_root_login: "no"           # Root-Login verbieten
+ssh_password_authentication: "no"     # Nur SSH-Key-Login erlauben
+ssh_pubkey_authentication: "yes"      # Public-Key-Authentifizierung aktivieren
+ssh_permit_empty_passwords: "no"      # Leere Passwörter verbieten
+ssh_challenge_response: "no"          # Challenge-Response deaktivieren
+ssh_use_pam: "yes"                    # PAM aktivieren
+
+ssh_max_auth_tries: 3                 # Max. Login-Versuche (Brute-Force-Schutz)
+ssh_max_sessions: 5                   # Max. gleichzeitige Sessions pro Verbindung
+ssh_max_startups: "10:30:60"          # Unauthentifizierte Verbindungen begrenzen
+
+ssh_login_grace_time: 30              # Sekunden für Login-Versuch (dann Trennung)
+
+# --- Erlaubte Benutzer/Gruppen -----------------------------------------------
+# Leer lassen = kein Filter (alle dürfen)
+ssh_allow_users: []                   # z.B. ["deploy", "admin"]
+ssh_allow_groups: []                  # z.B. ["ssh-users", "sudo"]
+ssh_deny_users: []                    # Explizit gesperrte Benutzer
+ssh_deny_groups: []                   # Explizit gesperrte Gruppen
+
+# --- Verbindungsverhalten ----------------------------------------------------
+ssh_client_alive_interval: 300       # Sekunden bis Keepalive-Paket gesendet wird
+ssh_client_alive_count_max: 2        # Anzahl unbeantworteter Keepalives → Trennung
+ssh_tcp_keep_alive: "no"             # TCP-KeepAlive deaktivieren (nutze ClientAlive)
+
+# --- Features (alle deaktivieren erhöht Sicherheit) --------------------------
+ssh_x11_forwarding: "no"             # X11-Forwarding deaktivieren
+ssh_agent_forwarding: "no"           # SSH-Agent-Forwarding deaktivieren
+ssh_tcp_forwarding: "no"             # TCP-Forwarding / Tunneling deaktivieren
+ssh_gateway_ports: "no"              # Remote-Hosts dürfen keine Ports weiterleiten
+ssh_permit_tunnel: "no"              # TUN-Device-Forwarding deaktivieren
+ssh_print_motd: "no"                 # MOTD nicht via SSH ausgeben (wird via PAM gemacht)
+ssh_print_last_log: "yes"            # Letzten Login anzeigen (Security-Awareness)
+ssh_use_dns: "no"                    # DNS-Lookups deaktivieren (schneller + sicherer)
+ssh_compression: "no"                # Kompression deaktivieren (Oracle-Angriffe)
+
+# --- Kryptographie -----------------------------------------------------------
+# Nur starke, moderne Algorithmen erlauben
+ssh_ciphers:
+  - "chacha20-poly1305@openssh.com"
+  - "aes256-gcm@openssh.com"
+  - "aes128-gcm@openssh.com"
+  - "aes256-ctr"
+  - "aes192-ctr"
+  - "aes128-ctr"
+
+ssh_macs:
+  - "hmac-sha2-512-etm@openssh.com"
+  - "hmac-sha2-256-etm@openssh.com"
+  - "hmac-sha2-512"
+  - "hmac-sha2-256"
+
+ssh_kex_algorithms:
+  - "curve25519-sha256"
+  - "curve25519-sha256@libssh.org"
+  - "diffie-hellman-group18-sha512"
+  - "diffie-hellman-group16-sha512"
+  - "diffie-hellman-group14-sha256"
+
+ssh_host_key_algorithms:
+  - "ssh-ed25519"
+  - "rsa-sha2-512"
+  - "rsa-sha2-256"
+
+# --- Logging -----------------------------------------------------------------
+ssh_log_level: "VERBOSE"             # INFO = Standard, VERBOSE = Key-Fingerprints loggen
+ssh_syslog_facility: "AUTH"          # Log-Facility
+
+# --- Banner ------------------------------------------------------------------
+ssh_banner_enabled: true
+ssh_banner_path: "/etc/ssh/banner.txt"
+ssh_banner_text: |
+  ############################################################
+  #                AUTHORIZED ACCESS ONLY                    #
+  #  All connections are monitored and recorded.             #
+  #  Unauthorized access will be prosecuted.                 #
+  ############################################################
+
+# --- SFTP --------------------------------------------------------------------
+ssh_sftp_enabled: true               # SFTP-Subsystem aktivieren
+ssh_sftp_chroot_group: ""            # Gruppe für SFTP-Chroot (leer = kein Chroot)
+
+# --- Key Management ----------------------------------------------------------
+ssh_manage_keys: true                # SSH-Keys automatisch generieren & deployen
+ssh_deploy_user: "deploy"            # Benutzer auf dem Server für SSH-Zugang
+ssh_deploy_groups:                   # Gruppen des Deploy-Users
+  - "sudo"
+ssh_authorized_keys_exclusive: false # true = nur dieser Key erlaubt (löscht andere)
+
+# Wo werden die generierten Keys lokal gespeichert?
+ssh_key_local_dir: "{{ playbook_dir }}/../../ssh_keys"
+ssh_key_backup_dir: "{{ playbook_dir }}/../../ssh_keys/backups"
+ssh_key_backup_enabled: true
+
+# Optional: Passphrase für Private Key (leer = keine, oder aus Vault laden)
+# ssh_key_passphrase: "{{ vault_ssh_key_passphrase }}"
+
+# Key-Rotation: auf true setzen um neuen Key zu erzwingen
+ssh_key_rotate: false
+
+# --- Verifikation & Rollback -------------------------------------------------
+ssh_verify_after_hardening: true     # SSH-Login nach Hardening automatisch testen
+                                     # Bei Fehler: automatischer Rollback!
+
+# --- Audit & Reporting -------------------------------------------------------
+ssh_audit_enabled: true              # Compliance-Report nach Hardening erstellen
+ssh_report_dir: "{{ playbook_dir }}/../../reports"
+
+# --- Firewall ----------------------------------------------------------------
+ssh_firewall_rate_limit: true        # UFW Rate Limiting für SSH (Brute-Force-Schutz)
+ssh_firewall_enable: false           # UFW einschalten (Vorsicht: erst testen!)
+
+# --- Key-Rotation (BSI SYS.1.3.A4) ------------------------------------------
+# Rotationszyklus in Tagen (0 = deaktiviert)
+ssh_key_rotation_days: 180           # 6 Monate — BSI-Empfehlung

@@ -1,0 +1,399 @@
+---
+# =============================================================================
+# playbooks/monitoring/vuln_scan.yml
+# Vulnerability-Scanning mit OpenSCAP und Trivy
+# BSI DER.3.1 · CIS L2
+#
+# Scans:
+#   OpenSCAP  — OS-Konfiguration gegen CIS/BSI-Profil prüfen
+#   Trivy     — CVE-Scan auf installierten Paketen
+#   Lynis     — Hardening-Audit (falls installiert)
+#
+# VERWENDUNG:
+#   # Vollständiger Scan (alle Tools)
+#   ansible-playbook playbooks/monitoring/vuln_scan.yml
+#
+#   # Nur OpenSCAP
+#   ansible-playbook playbooks/monitoring/vuln_scan.yml --tags oscap
+#
+#   # Nur CVE-Scan (Trivy)
+#   ansible-playbook playbooks/monitoring/vuln_scan.yml --tags trivy
+#
+#   # Einzelner Host
+#   ansible-playbook playbooks/monitoring/vuln_scan.yml --limit web01
+#
+#   # Reports lokal speichern (Standard: reports/)
+#   ansible-playbook playbooks/monitoring/vuln_scan.yml \
+#     -e "vuln_report_dir=/tmp/scans"
+# =============================================================================
+
+- name: "Bootstrap | Python sicherstellen"
+  hosts: all
+  gather_facts: false
+  become: true
+  tags: [always]
+  tasks:
+    - ansible.builtin.raw: |
+        test -e /usr/bin/python3 || (apt-get update -qq && apt-get install -y python3)
+      changed_when: false
+
+- name: "🔍 Vulnerability-Scanning"
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    vuln_report_dir: "{{ playbook_dir }}/../../reports"
+    vuln_scan_oscap: true
+    vuln_scan_trivy: true
+    vuln_scan_lynis: true
+    vuln_oscap_profile: "xccdf_org.ssgproject.content_profile_cis_level2_server"
+    vuln_oscap_datastream_debian: "/usr/share/xml/scap/ssg/content/ssg-ubuntu2204-ds.xml"
+    vuln_oscap_datastream_rhel: "/usr/share/xml/scap/ssg/content/ssg-rhel9-ds.xml"
+    vuln_trivy_severity: "CRITICAL,HIGH"     # CRITICAL,HIGH,MEDIUM,LOW
+    vuln_fail_on_critical: false             # true = Playbook schlägt fehl bei CRITICAL CVEs
+
+  pre_tasks:
+    - name: "Vorbereitung | Report-Verzeichnisse anlegen"
+      ansible.builtin.file:
+        path: "{{ vuln_report_dir }}/{{ inventory_hostname }}"
+        state: directory
+        mode: "0750"
+      delegate_to: localhost
+      become: false
+      tags: [always]
+
+    - name: "Info | Scan-Ziel"
+      ansible.builtin.debug:
+        msg:
+          - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          - "  Vulnerability-Scan: {{ inventory_hostname }}"
+          - "  OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "  Kernel: {{ ansible_kernel }}"
+          - "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      tags: [always]
+
+  tasks:
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # BLOCK 1: OpenSCAP — Konfigurations-Compliance
+    # ──────────────────────────────────────────────────────────────────────────
+
+    - name: "OpenSCAP | Pakete installieren (Debian/Ubuntu)"
+      ansible.builtin.apt:
+        name:
+          - libopenscap8
+          - openscap-scanner
+          - ssg-debian
+          - ssg-base
+        state: present
+        update_cache: false
+      when:
+        - vuln_scan_oscap | bool
+        - ansible_os_family == 'Debian'
+      failed_when: false
+      tags: [oscap, scan]
+
+    - name: "OpenSCAP | Pakete installieren (RHEL/Rocky)"
+      ansible.builtin.dnf:
+        name:
+          - openscap-scanner
+          - scap-security-guide
+        state: present
+      when:
+        - vuln_scan_oscap | bool
+        - ansible_os_family == 'RedHat'
+      failed_when: false
+      tags: [oscap, scan]
+
+    - name: "OpenSCAP | SCAP-Datastream-Datei lokalisieren"
+      ansible.builtin.find:
+        paths:
+          - /usr/share/xml/scap/ssg/content
+          - /usr/share/scap-security-guide
+        patterns:
+          - "ssg-ubuntu*.xml"
+          - "ssg-debian*.xml"
+          - "ssg-rhel*.xml"
+        recurse: false
+      register: oscap_datastream_found
+      when: vuln_scan_oscap | bool
+      tags: [oscap, scan]
+
+    - name: "OpenSCAP | Datastream-Pfad setzen"
+      ansible.builtin.set_fact:
+        oscap_datastream: >-
+          {{
+            oscap_datastream_found.files
+            | sort(attribute='mtime') | last
+            | default({})
+            | json_query('path')
+            | default('')
+          }}
+      when:
+        - vuln_scan_oscap | bool
+        - oscap_datastream_found.files | length > 0
+      tags: [oscap, scan]
+
+    - name: "OpenSCAP | Scan ausführen (async, kann 3-5 min dauern)"
+      ansible.builtin.command: >-
+        oscap xccdf eval
+        --profile {{ vuln_oscap_profile }}
+        --results /tmp/oscap-results-{{ inventory_hostname }}.xml
+        --report /tmp/oscap-report-{{ inventory_hostname }}.html
+        --oval-results
+        {{ oscap_datastream | default(vuln_oscap_datastream_debian) }}
+      register: oscap_result
+      async: 600
+      poll: 20
+      failed_when: oscap_result.rc > 2   # rc=0 ok, rc=1 fehler, rc=2 nicht-complient
+      changed_when: false
+      when:
+        - vuln_scan_oscap | bool
+        - oscap_datastream | default('') != ''
+      tags: [oscap, scan]
+
+    - name: "OpenSCAP | HTML-Report herunterladen"
+      ansible.builtin.fetch:
+        src: "/tmp/oscap-report-{{ inventory_hostname }}.html"
+        dest: "{{ vuln_report_dir }}/{{ inventory_hostname }}/oscap_{{ ansible_date_time.date }}.html"
+        flat: true
+      when:
+        - vuln_scan_oscap | bool
+        - oscap_result is not skipped
+        - oscap_result is not failed
+      tags: [oscap, scan]
+
+    - name: "OpenSCAP | XML-Ergebnisse herunterladen"
+      ansible.builtin.fetch:
+        src: "/tmp/oscap-results-{{ inventory_hostname }}.xml"
+        dest: "{{ vuln_report_dir }}/{{ inventory_hostname }}/oscap_{{ ansible_date_time.date }}.xml"
+        flat: true
+      when:
+        - vuln_scan_oscap | bool
+        - oscap_result is not skipped
+        - oscap_result is not failed
+      tags: [oscap, scan]
+
+    - name: "OpenSCAP | Ergebnis-Zusammenfassung extrahieren"
+      ansible.builtin.shell: |
+        grep -oP '(?<=result=")[^"]+' /tmp/oscap-results-{{ inventory_hostname }}.xml \
+          | sort | uniq -c | sort -rn || echo "keine Ergebnisse"
+      register: oscap_summary
+      changed_when: false
+      failed_when: false
+      when:
+        - vuln_scan_oscap | bool
+        - oscap_result is not skipped
+      tags: [oscap, scan]
+
+    - name: "OpenSCAP | Zusammenfassung anzeigen"
+      ansible.builtin.debug:
+        msg: "OpenSCAP Ergebnisse:\n{{ oscap_summary.stdout }}"
+      when:
+        - vuln_scan_oscap | bool
+        - oscap_summary is not skipped
+      tags: [oscap, scan]
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # BLOCK 2: Trivy — CVE-Scan auf Paketen
+    # ──────────────────────────────────────────────────────────────────────────
+
+    - name: "Trivy | Repository-Key importieren (Debian/Ubuntu)"
+      ansible.builtin.shell: |
+        curl -fsSL https://aquasecurity.github.io/trivy-repo/deb/public.key \
+          | gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+      args:
+        creates: /usr/share/keyrings/trivy.gpg
+        executable: /bin/bash
+      when:
+        - vuln_scan_trivy | bool
+        - ansible_os_family == 'Debian'
+      failed_when: false
+      tags: [trivy, scan]
+
+    - name: "Trivy | Repository eintragen (Debian/Ubuntu)"
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main"
+        state: present
+        filename: trivy
+      when:
+        - vuln_scan_trivy | bool
+        - ansible_os_family == 'Debian'
+      failed_when: false
+      tags: [trivy, scan]
+
+    - name: "Trivy | Installieren"
+      ansible.builtin.package:
+        name: trivy
+        state: present
+        update_cache: true
+      when: vuln_scan_trivy | bool
+      failed_when: false
+      tags: [trivy, scan]
+
+    - name: "Trivy | Verfügbarkeit prüfen"
+      ansible.builtin.command: which trivy
+      register: trivy_available
+      changed_when: false
+      failed_when: false
+      when: vuln_scan_trivy | bool
+      tags: [trivy, scan]
+
+    - name: "Trivy | CVE-Datenbank aktualisieren"
+      ansible.builtin.command: trivy image --download-db-only
+      register: trivy_db_update
+      changed_when: false
+      failed_when: false
+      when:
+        - vuln_scan_trivy | bool
+        - trivy_available.rc == 0
+      tags: [trivy, scan]
+
+    - name: "Trivy | OS-Pakete scannen (JSON)"
+      ansible.builtin.command: >-
+        trivy rootfs /
+        --severity {{ vuln_trivy_severity }}
+        --format json
+        --output /tmp/trivy-report-{{ inventory_hostname }}.json
+        --skip-dirs /proc,/sys,/dev,/run
+        --timeout 10m
+      register: trivy_scan
+      changed_when: false
+      failed_when: false
+      async: 700
+      poll: 20
+      when:
+        - vuln_scan_trivy | bool
+        - trivy_available.rc == 0
+      tags: [trivy, scan]
+
+    - name: "Trivy | Lesbaren Report generieren (Table)"
+      ansible.builtin.command: >-
+        trivy rootfs /
+        --severity {{ vuln_trivy_severity }}
+        --format table
+        --output /tmp/trivy-report-{{ inventory_hostname }}.txt
+        --skip-dirs /proc,/sys,/dev,/run
+        --timeout 10m
+      register: trivy_scan_table
+      changed_when: false
+      failed_when: false
+      async: 700
+      poll: 20
+      when:
+        - vuln_scan_trivy | bool
+        - trivy_available.rc == 0
+      tags: [trivy, scan]
+
+    - name: "Trivy | Reports herunterladen"
+      ansible.builtin.fetch:
+        src: "/tmp/trivy-report-{{ inventory_hostname }}.{{ item }}"
+        dest: "{{ vuln_report_dir }}/{{ inventory_hostname }}/trivy_{{ ansible_date_time.date }}.{{ item }}"
+        flat: true
+      loop: [json, txt]
+      when:
+        - vuln_scan_trivy | bool
+        - trivy_available.rc == 0
+        - trivy_scan is not skipped
+      failed_when: false
+      tags: [trivy, scan]
+
+    - name: "Trivy | CRITICAL-Befunde zählen"
+      ansible.builtin.shell: |
+        grep -c '"Severity": "CRITICAL"' \
+          /tmp/trivy-report-{{ inventory_hostname }}.json 2>/dev/null || echo "0"
+      register: trivy_critical_count
+      changed_when: false
+      failed_when: false
+      when:
+        - vuln_scan_trivy | bool
+        - trivy_available.rc == 0
+      tags: [trivy, scan]
+
+    - name: "Trivy | HIGH-Befunde zählen"
+      ansible.builtin.shell: |
+        grep -c '"Severity": "HIGH"' \
+          /tmp/trivy-report-{{ inventory_hostname }}.json 2>/dev/null || echo "0"
+      register: trivy_high_count
+      changed_when: false
+      failed_when: false
+      when:
+        - vuln_scan_trivy | bool
+        - trivy_available.rc == 0
+      tags: [trivy, scan]
+
+    - name: "Trivy | FEHLER bei CRITICAL-Befunden (wenn konfiguriert)"
+      ansible.builtin.fail:
+        msg: >-
+          ❌ {{ trivy_critical_count.stdout | trim }} CRITICAL CVEs auf
+          {{ inventory_hostname }} gefunden!
+          Report: {{ vuln_report_dir }}/{{ inventory_hostname }}/trivy_{{ ansible_date_time.date }}.txt
+      when:
+        - vuln_fail_on_critical | bool
+        - vuln_scan_trivy | bool
+        - trivy_available.rc == 0
+        - (trivy_critical_count.stdout | trim | int) > 0
+      tags: [trivy, scan]
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # BLOCK 3: Konsolidierter Scan-Report
+    # ──────────────────────────────────────────────────────────────────────────
+
+    - name: "Report | Konsolidierter Vulnerability-Report erstellen"
+      ansible.builtin.copy:
+        content: |
+          ================================================================
+          VULNERABILITY SCAN REPORT
+          ================================================================
+          Host:         {{ inventory_hostname }} ({{ ansible_host }})
+          Datum:        {{ ansible_date_time.iso8601 }}
+          OS:           {{ ansible_distribution }} {{ ansible_distribution_version }}
+          Kernel:       {{ ansible_kernel }}
+          ----------------------------------------------------------------
+          OPENSCAP (Konfigurations-Compliance)
+          ----------------------------------------------------------------
+          Profil:       {{ vuln_oscap_profile }}
+          Status:       {{ 'durchgeführt' if (oscap_result is not skipped and oscap_result is not failed) else 'übersprungen/fehlgeschlagen' }}
+          Ergebnisse:
+          {{ oscap_summary.stdout | default('nicht verfügbar') }}
+          HTML-Report:  {{ vuln_report_dir }}/{{ inventory_hostname }}/oscap_{{ ansible_date_time.date }}.html
+          ----------------------------------------------------------------
+          TRIVY (CVE-Scan)
+          ----------------------------------------------------------------
+          Status:       {{ 'durchgeführt' if (trivy_available.rc | default(1)) == 0 else 'nicht installiert/übersprungen' }}
+          Severity:     {{ vuln_trivy_severity }}
+          CRITICAL:     {{ trivy_critical_count.stdout | default('N/A') | trim }}
+          HIGH:         {{ trivy_high_count.stdout | default('N/A') | trim }}
+          Report:       {{ vuln_report_dir }}/{{ inventory_hostname }}/trivy_{{ ansible_date_time.date }}.txt
+          ================================================================
+        dest: "{{ vuln_report_dir }}/{{ inventory_hostname }}/vuln_summary_{{ ansible_date_time.date }}.txt"
+        mode: "0640"
+      delegate_to: localhost
+      become: false
+      tags: [report]
+
+    - name: "Report | ✅ Scan abgeschlossen"
+      ansible.builtin.debug:
+        msg:
+          - "============================================="
+          - "  Vulnerability-Scan: {{ inventory_hostname }}"
+          - "============================================="
+          - "  OpenSCAP: {{ 'OK' if (oscap_result is not skipped and oscap_result is not failed) else 'übersprungen' }}"
+          - "  Trivy:    {{ 'CRITICAL=' + (trivy_critical_count.stdout | trim) + ' HIGH=' + (trivy_high_count.stdout | trim) if (trivy_available.rc | default(1)) == 0 else 'nicht verfügbar' }}"
+          - "  Reports:  {{ vuln_report_dir }}/{{ inventory_hostname }}/"
+          - "============================================="
+      tags: [always]
+
+    # ── Temporäre Scan-Dateien aufräumen ──────────────────────────────────────
+    - name: "Cleanup | Temporäre Scan-Dateien entfernen"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/oscap-results-{{ inventory_hostname }}.xml"
+        - "/tmp/oscap-report-{{ inventory_hostname }}.html"
+        - "/tmp/trivy-report-{{ inventory_hostname }}.json"
+        - "/tmp/trivy-report-{{ inventory_hostname }}.txt"
+      failed_when: false
+      tags: [cleanup]

@@ -1,0 +1,68 @@
+---
+# =============================================================================
+# playbooks/hardening/logging.yml — Nur Remote-Logging konfigurieren
+# BSI OPS.1.1.5 · CIS 6.2
+#
+# VERWENDUNG:
+#   # Remote-Logging auf allen Servern konfigurieren
+#   ansible-playbook playbooks/hardening/logging.yml \
+#     -e "syslog_remote_host=syslog.example.com"
+#
+#   # Nur journald aktualisieren
+#   ansible-playbook playbooks/hardening/logging.yml --tags journald
+#
+#   # Nur Konnektivitätstest
+#   ansible-playbook playbooks/hardening/logging.yml --tags test
+#
+#   # Mit TLS
+#   ansible-playbook playbooks/hardening/logging.yml \
+#     -e "syslog_remote_protocol=tls syslog_remote_port=6514"
+# =============================================================================
+
+- name: "Bootstrap | Python sicherstellen"
+  hosts: all
+  gather_facts: false
+  become: true
+  tags: [always]
+  tasks:
+    - ansible.builtin.raw: |
+        test -e /usr/bin/python3 || (apt-get update -qq && apt-get install -y python3)
+      changed_when: false
+
+- name: "📡 Remote-Logging konfigurieren"
+  hosts: all
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: "Vorbereitung | Report-Verzeichnis"
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../../reports"
+        state: directory
+        mode: "0750"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      tags: [always]
+
+  tasks:
+    - name: "Pakete | rsyslog Spool-Verzeichnis"
+      ansible.builtin.file:
+        path: /var/spool/rsyslog
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      tags: [logging, packages]
+
+    - name: "Pakete | rsyslog installieren"
+      ansible.builtin.package:
+        name: "{{ syslog_packages_debian if ansible_os_family == 'Debian' else syslog_packages_rhel }}"
+        state: present
+      tags: [logging, packages]
+
+    - name: "Logging | Remote-Logging Tasks ausführen"
+      ansible.builtin.include_role:
+        name: os_hardening
+        tasks_from: logging.yml
+      tags: [logging, syslog, journald]

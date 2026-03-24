@@ -1,0 +1,87 @@
+---
+# =============================================================================
+# playbooks/maintenance/ssh_key_rotation.yml
+# SSH-Key-Rotation — sicher mit Übergangsphase
+# BSI SYS.1.3.A4 · Crypto-Hygiene
+#
+# VERWENDUNG:
+#   # Automatisch (rotiert nur wenn Key älter als ssh_key_rotation_days)
+#   ansible-playbook playbooks/maintenance/ssh_key_rotation.yml
+#
+#   # Bestimmte Server
+#   ansible-playbook playbooks/maintenance/ssh_key_rotation.yml \
+#     --limit webservers
+#
+#   # Rotation erzwingen (unabhängig vom Alter)
+#   ansible-playbook playbooks/maintenance/ssh_key_rotation.yml \
+#     -e "ssh_key_rotate=true"
+#
+#   # Anderen Rotationszyklus (90 Tage statt Standard)
+#   ansible-playbook playbooks/maintenance/ssh_key_rotation.yml \
+#     -e "ssh_key_rotation_days=90"
+#
+#   # Dry-Run — zeigt ob Rotation nötig wäre
+#   ansible-playbook playbooks/maintenance/ssh_key_rotation.yml \
+#     --check
+# =============================================================================
+
+- name: "Bootstrap | Python sicherstellen"
+  hosts: all
+  gather_facts: false
+  become: true
+  tags: [always]
+  tasks:
+    - ansible.builtin.raw: |
+        test -e /usr/bin/python3 || (apt-get update -qq && apt-get install -y python3)
+      changed_when: false
+
+- name: "🔑 SSH-Key-Rotation"
+  hosts: all
+  become: true
+  gather_facts: true
+  serial: 1   # Immer einen Host nach dem anderen — sicherer
+
+  pre_tasks:
+    - name: "Vorbereitung | Key-Verzeichnisse sicherstellen"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0700"
+      loop:
+        - "{{ playbook_dir }}/../../ssh_keys"
+        - "{{ playbook_dir }}/../../ssh_keys/backups"
+        - "{{ playbook_dir }}/../../reports"
+      delegate_to: localhost
+      become: false
+      tags: [always]
+
+  tasks:
+    - name: "SSH-Key-Rotation ausführen"
+      ansible.builtin.include_role:
+        name: ssh_hardening
+        tasks_from: key_rotation.yml
+      tags: [ssh, rotation]
+
+  post_tasks:
+    - name: "Ablauf-Check | Keys die bald rotiert werden müssen"
+      ansible.builtin.shell: |
+        find "{{ playbook_dir }}/../../ssh_keys" \
+          -name "id_ed25519" -not -name "*.retired.*" \
+          -mtime +{{ (ssh_key_rotation_days | int) - 7 }} 2>/dev/null \
+          | while read key; do
+              host=$(basename $(dirname "$key"))
+              age=$(( ( $(date +%s) - $(stat -c %Y "$key") ) / 86400 ))
+              echo "⚠️  $host: Key ist $age Tage alt"
+            done || echo "Alle Keys aktuell"
+      register: rotation_upcoming
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      run_once: true
+      tags: [always]
+
+    - name: "Ablauf-Check | Ergebnis"
+      ansible.builtin.debug:
+        msg: "{{ rotation_upcoming.stdout_lines }}"
+      run_once: true
+      tags: [always]

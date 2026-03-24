@@ -1,0 +1,95 @@
+# =============================================================================
+# /etc/apparmor.d/usr.sbin.sshd
+# AppArmor-Profil für OpenSSH-Daemon
+# Generiert von Ansible OS Hardening Role
+# BSI SYS.1.3.A6 · CIS 1.3
+# =============================================================================
+
+#include <tunables/global>
+
+/usr/sbin/sshd {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+  #include <abstractions/authentication>
+  #include <abstractions/wutmp>
+
+  # Capabilities
+  capability net_bind_service,
+  capability sys_chroot,
+  capability sys_resource,
+  capability setuid,
+  capability setgid,
+  capability audit_write,
+  capability dac_override,
+  capability dac_read_search,
+  capability chown,
+  capability fowner,
+  capability fsetid,
+
+  # Netzwerk
+  network inet stream,
+  network inet6 stream,
+  network unix stream,
+
+  # SSH-Binary und Libraries
+  /usr/sbin/sshd mr,
+  /usr/lib{,32,64}/** mr,
+  /lib{,32,64}/** mr,
+
+  # Konfiguration (read-only)
+  /etc/ssh/** r,
+  /etc/ssh/sshd_config r,
+  /etc/ssh/ssh_host_*_key r,
+
+  # PAM
+  /etc/pam.d/sshd r,
+  /etc/pam.d/common-* r,
+  /lib/*/security/pam_*.so mr,
+  /lib64/*/security/pam_*.so mr,
+
+  # Systemdateien
+  /etc/passwd r,
+  /etc/shadow r,
+  /etc/group r,
+  /etc/gshadow r,
+  /etc/nsswitch.conf r,
+  /etc/hosts r,
+  /etc/localtime r,
+  /etc/login.defs r,
+  /etc/security/** r,
+
+  # Logging
+  /var/log/auth.log w,
+  /var/log/syslog w,
+
+  # User-Home (für authorized_keys)
+  @{HOME}/.ssh/ r,
+  @{HOME}/.ssh/authorized_keys r,
+  @{HOME}/.ssh/authorized_keys2 r,
+
+  # Temp
+  /tmp/ r,
+  /tmp/ssh-*/ rw,
+  /tmp/ssh-*/** rw,
+
+  # Proc
+  /proc/*/fd/ r,
+  /proc/*/status r,
+  /proc/sys/kernel/ngroups_max r,
+
+  # Run
+  /run/sshd/ rw,
+  /run/sshd.pid rw,
+
+  # Locale
+  /usr/share/locale/** r,
+  /usr/share/locale-langpack/** r,
+
+  # Child-Prozess (sshd spawnt User-Shells)
+  /bin/** ix,
+  /usr/bin/** ix,
+  /usr/local/bin/** ix,
+
+  # Lokal anpassbar
+  #include <local/usr.sbin.sshd>
+}

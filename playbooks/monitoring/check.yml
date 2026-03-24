@@ -1,0 +1,137 @@
+---
+# =============================================================================
+# playbooks/monitoring/check.yml — Server Health Check & Status-Überblick
+#
+# Prüft: Erreichbarkeit, Ressourcen, laufende Dienste, Sicherheitsstatus
+# Erstellt einen konsolidierten Bericht lokal.
+#
+# VERWENDUNG:
+#   ansible-playbook playbooks/monitoring/check.yml
+#   ansible-playbook playbooks/monitoring/check.yml --limit web01
+# =============================================================================
+
+- name: "📊 Monitoring | Health Check"
+  hosts: all
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: "Check | Uptime"
+      ansible.builtin.command: uptime
+      changed_when: false
+      register: check_uptime
+      tags: [monitoring, check]
+
+    - name: "Check | Disk-Nutzung"
+      ansible.builtin.command: df -h
+      changed_when: false
+      register: check_disk
+      tags: [monitoring, check]
+
+    - name: "Check | Speicher"
+      ansible.builtin.command: free -h
+      changed_when: false
+      register: check_mem
+      tags: [monitoring, check]
+
+    - name: "Check | Laufende Dienste prüfen"
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+      loop:
+        - ssh
+        - auditd
+        - fail2ban
+        - systemd-timesyncd
+        - unattended-upgrades
+      register: check_services
+      failed_when: false
+      tags: [monitoring, check, services]
+
+    - name: "Check | Letzte Fail2ban-Bans"
+      ansible.builtin.shell: |
+        fail2ban-client status 2>/dev/null \
+          | grep "Jail list" \
+          | sed 's/.*Jail list:\s*//' \
+          | tr ',' '\n' \
+          | tr -d ' ' \
+          | while read jail; do
+              [ -n "$jail" ] && fail2ban-client status "$jail" 2>/dev/null | grep "Currently banned"
+            done || echo "fail2ban nicht aktiv"
+      args:
+        executable: /bin/bash
+      register: check_f2b
+      changed_when: false
+      failed_when: false
+      tags: [monitoring, check, security]
+
+    - name: "Check | Letzte Audit-Ereignisse (letzten 20)"
+      ansible.builtin.command: ausearch -ts recent -i
+      changed_when: false
+      failed_when: false
+      register: check_audit
+      tags: [monitoring, check, security]
+
+    - name: "Check | Fehlgeschlagene Login-Versuche (heute)"
+      ansible.builtin.shell: |
+        grep "Failed password\|Invalid user" /var/log/auth.log 2>/dev/null \
+          | grep "$(date '+%b %e')" | wc -l
+      changed_when: false
+      failed_when: false
+      register: check_failed_logins
+      tags: [monitoring, check, security]
+
+    - name: "Check | Reboot erforderlich?"
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: check_reboot
+      when: ansible_os_family == 'Debian'
+      tags: [monitoring, check]
+
+    - name: "Check | Report-Verzeichnis sicherstellen"
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../../reports"
+        state: directory
+        mode: "0750"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      tags: [monitoring, check]
+
+    - name: "Check | Health-Report schreiben"
+      ansible.builtin.copy:
+        content: |
+          ================================================================
+          HEALTH CHECK REPORT
+          ================================================================
+          Host:        {{ inventory_hostname }} ({{ ansible_host }})
+          Datum:       {{ ansible_date_time.iso8601 }}
+          OS:          {{ ansible_distribution }} {{ ansible_distribution_version }}
+          Kernel:      {{ ansible_kernel }}
+          ----------------------------------------------------------------
+          RESSOURCEN
+          ----------------------------------------------------------------
+          {{ check_uptime.stdout }}
+          {{ check_disk.stdout }}
+          {{ check_mem.stdout }}
+          ----------------------------------------------------------------
+          SICHERHEIT
+          ----------------------------------------------------------------
+          Fehlgeschlagene Logins heute: {{ check_failed_logins.stdout | trim }}
+          Reboot erforderlich:          {{ check_reboot.stat.exists | default(false) }}
+          Fail2ban sshd:
+          {{ check_f2b.stdout | default('nicht verfügbar') }}
+          ================================================================
+        dest: "{{ playbook_dir }}/../../reports/{{ inventory_hostname }}_health_{{ ansible_date_time.date }}.txt"
+        mode: "0640"
+      delegate_to: localhost
+      become: false
+      tags: [monitoring, check]
+
+    - name: "Check | ✅ Zusammenfassung"
+      ansible.builtin.debug:
+        msg:
+          - "Host:   {{ inventory_hostname }}"
+          - "Uptime: {{ check_uptime.stdout }}"
+          - "Logins fehlgeschlagen: {{ check_failed_logins.stdout | trim }}"
+          - "Reboot nötig: {{ check_reboot.stat.exists | default(false) }}"
+      tags: [monitoring, check]

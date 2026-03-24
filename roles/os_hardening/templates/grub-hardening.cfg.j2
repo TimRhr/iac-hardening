@@ -1,0 +1,22 @@
+#!/bin/sh
+# =============================================================================
+# /etc/grub.d/40_custom_hardening
+# Generiert von Ansible OS Hardening Role
+# BSI SYS.1.3.A5 · CIS 1.4
+# Setzt GRUB-Superuser und Passwort-Schutz
+# =============================================================================
+exec tail -n +3 $0
+
+# GRUB-Superuser — nur dieser Account darf Boot-Optionen ändern
+set superusers="{{ bootloader_grub_superuser }}"
+
+# PBKDF2-Hash des GRUB-Passworts (generiert via grub-mkpasswd-pbkdf2)
+# Das Klartext-Passwort liegt in Ansible Vault (vault_bootloader_grub_password)
+password_pbkdf2 {{ bootloader_grub_superuser }} {{ bootloader_passwd_hash.stdout }}
+
+# Alle Menü-Einträge benötigen Authentifizierung,
+# außer explizit mit --unrestricted markierte
+{% if bootloader_menuentry_unrestricted %}
+# Normaler Boot (ohne Passwort) — nur Passwort nötig zum Editieren
+menuentry_id_option="--unrestricted"
+{% endif %}

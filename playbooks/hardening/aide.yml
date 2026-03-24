@@ -1,0 +1,158 @@
+---
+# =============================================================================
+# playbooks/hardening/aide.yml — AIDE Filesystem Integrity Management
+# BSI SYS.1.3.A9 · CIS Benchmark 6.1
+#
+# VERWENDUNG:
+#   # AIDE einrichten / Datenbank initialisieren
+#   ansible-playbook playbooks/hardening/aide.yml --tags aide-init
+#
+#   # Manuellen Integritäts-Check auslösen
+#   ansible-playbook playbooks/hardening/aide.yml --tags aide-check
+#
+#   # Datenbank aktualisieren (nach geplanten Änderungen)
+#   ansible-playbook playbooks/hardening/aide.yml --tags aide-update
+#
+#   # Datenbank ERZWINGEN neu erstellen
+#   ansible-playbook playbooks/hardening/aide.yml -e "aide_reinit=true" --tags aide-init
+#
+#   # Report des letzten Checks anzeigen
+#   ansible-playbook playbooks/hardening/aide.yml --tags aide-report
+#
+#   # Status aller Hosts prüfen
+#   ansible-playbook playbooks/hardening/aide.yml --tags aide-status
+# =============================================================================
+
+- name: "Bootstrap | Python sicherstellen"
+  hosts: all
+  gather_facts: false
+  become: true
+  tags: [always]
+  tasks:
+    - ansible.builtin.raw: |
+        test -e /usr/bin/python3 || (apt-get update -qq && apt-get install -y python3)
+      changed_when: false
+
+- name: "🔍 AIDE | Filesystem Integrity Management"
+  hosts: all
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: "Vorbereitung | Report-Verzeichnis"
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../../reports"
+        state: directory
+        mode: "0750"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      tags: [always]
+
+  tasks:
+
+    # ── AIDE Setup / Init ───────────────────────────────────────────────────
+    - name: "AIDE | Vollständige Einrichtung via Rolle"
+      ansible.builtin.include_role:
+        name: os_hardening
+        tasks_from: aide.yml
+      tags: [aide-init, aide]
+
+    # ── Manueller Check ─────────────────────────────────────────────────────
+    - name: "AIDE | Manuellen Check starten"
+      ansible.builtin.command:
+        cmd: /usr/local/lib/aide/aide-check.sh
+      register: manual_check
+      failed_when: manual_check.rc > 7
+      changed_when: manual_check.rc != 0
+      tags: [aide-check, never]   # Nur mit --tags aide-check
+
+    - name: "AIDE | Check-Ergebnis"
+      ansible.builtin.debug:
+        msg: "RC={{ manual_check.rc }} — {{ manual_check.stdout_lines[-3:] }}"
+      tags: [aide-check, never]
+
+    # ── DB-Update ───────────────────────────────────────────────────────────
+    - name: "AIDE | Datenbank aktualisieren"
+      ansible.builtin.command:
+        cmd: /usr/local/lib/aide/aide-check.sh --update
+      register: manual_update
+      failed_when: false
+      changed_when: true
+      tags: [aide-update, never]  # Nur mit --tags aide-update
+
+    - name: "AIDE | Update-Ergebnis"
+      ansible.builtin.debug:
+        msg: "{{ manual_update.stdout_lines[-5:] | default(['Kein Output']) }}"
+      tags: [aide-update, never]
+
+    # ── Letzten Report anzeigen ──────────────────────────────────────────────
+    - name: "AIDE | Neuesten Report-Pfad ermitteln"
+      ansible.builtin.shell: |
+        ls -t {{ aide_log_dir }}/aide-report-*.log 2>/dev/null | head -1
+      register: latest_report_path
+      changed_when: false
+      failed_when: false
+      tags: [aide-report, never]
+
+    - name: "AIDE | Report-Inhalt lesen"
+      ansible.builtin.slurp:
+        src: "{{ latest_report_path.stdout | trim }}"
+      register: latest_report_content
+      when: latest_report_path.stdout | trim != ''
+      failed_when: false
+      tags: [aide-report, never]
+
+    - name: "AIDE | Report lokal sichern"
+      ansible.builtin.copy:
+        content: "{{ latest_report_content.content | b64decode }}"
+        dest: "{{ playbook_dir }}/../../reports/{{ inventory_hostname }}_aide_manual_{{ ansible_date_time.date }}.txt"
+        mode: "0640"
+      delegate_to: localhost
+      become: false
+      when:
+        - latest_report_path.stdout | trim != ''
+        - latest_report_content is not skipped
+      tags: [aide-report, never]
+
+    - name: "AIDE | Report-Zusammenfassung"
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            (latest_report_content.content | default('') | b64decode)
+            .split('\n') | select('match', '^(Summary|Added|Removed|Changed|Total|AIDE)')
+            | list | join('\n')
+            or 'Kein Report gefunden.'
+          }}
+      tags: [aide-report, never]
+
+    # ── Status-Übersicht ────────────────────────────────────────────────────
+    - name: "AIDE | Datenbank vorhanden?"
+      ansible.builtin.stat:
+        path: "{{ aide_db_dir }}/aide.db.gz"
+      register: status_db
+      tags: [aide-status, never]
+
+    - name: "AIDE | Letzter Check-Timestamp"
+      ansible.builtin.slurp:
+        src: "{{ aide_log_dir }}/aide-last-check.txt"
+      register: status_last_check
+      failed_when: false
+      tags: [aide-status, never]
+
+    - name: "AIDE | Cronjob vorhanden?"
+      ansible.builtin.shell: |
+        crontab -l -u root 2>/dev/null | grep -c "aide-check" || echo "0"
+      register: status_cron
+      changed_when: false
+      tags: [aide-status, never]
+
+    - name: "AIDE | Status-Übersicht"
+      ansible.builtin.debug:
+        msg:
+          - "Host:           {{ inventory_hostname }}"
+          - "DB vorhanden:   {{ status_db.stat.exists | default(false) }}"
+          - "DB-Größe:       {{ (status_db.stat.size | default(0) / 1024) | round(1) }} KB"
+          - "Letzter Check:  {{ (status_last_check.content | default('') | b64decode) | trim or 'noch kein Check' }}"
+          - "Cronjobs:       {{ status_cron.stdout | trim }} AIDE-Eintrag(e)"
+      tags: [aide-status, never]

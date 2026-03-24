@@ -1,0 +1,45 @@
+---
+# =============================================================================
+# playbooks/maintenance/reboot.yml — Kontrollierter Rollierender Reboot
+#
+# VERWENDUNG:
+#   ansible-playbook playbooks/maintenance/reboot.yml
+#   ansible-playbook playbooks/maintenance/reboot.yml --limit web01
+# =============================================================================
+
+- name: "🔁 Maintenance | Rollierender Reboot"
+  hosts: all
+  become: true
+  gather_facts: true
+  serial: 1              # Immer nur einen Server gleichzeitig neu starten
+
+  tasks:
+    - name: "Reboot | Bestätigung"
+      ansible.builtin.debug:
+        msg: "Starte Reboot für {{ inventory_hostname }} ({{ ansible_host }})"
+      tags: [maintenance, reboot]
+
+    - name: "Reboot | Server neu starten"
+      ansible.builtin.reboot:
+        reboot_timeout: 300
+        connect_timeout: 10
+        pre_reboot_delay: 5
+        post_reboot_delay: 15
+        msg: "Ansible-gesteuerter Reboot (maintenance/reboot.yml)"
+      tags: [maintenance, reboot]
+
+    - name: "Reboot | Warte auf SSH-Verfügbarkeit"
+      ansible.builtin.wait_for_connection:
+        timeout: 120
+      tags: [maintenance, reboot]
+
+    - name: "Reboot | Uptime prüfen"
+      ansible.builtin.command: uptime
+      changed_when: false
+      register: uptime_result
+      tags: [maintenance, reboot]
+
+    - name: "Reboot | ✅ Server wieder online"
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} ist wieder online — {{ uptime_result.stdout }}"
+      tags: [maintenance, reboot]

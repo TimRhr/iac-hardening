@@ -1,0 +1,45 @@
+---
+# =============================================================================
+# inventory/group_vars/all/main.yml — Gilt für ALLE Server
+# =============================================================================
+
+# ── SSH Hardening ─────────────────────────────────────────────────────────────
+ssh_port: 22
+ssh_permit_root_login: "no"
+ssh_password_authentication: "no"
+ssh_max_auth_tries: 3
+ssh_log_level: "VERBOSE"
+ssh_banner_enabled: true
+ssh_allow_groups:
+  - "ssh-users"
+ssh_client_alive_interval: 300
+ssh_client_alive_count_max: 2
+ssh_deploy_user: "deploy"
+ssh_manage_keys: true
+ssh_verify_after_hardening: true
+ssh_audit_enabled: true
+ssh_firewall_rate_limit: true
+
+# ── OS Hardening ──────────────────────────────────────────────────────────────
+os_ntp_enabled: true
+os_ntp_servers:
+  - "0.de.pool.ntp.org"
+  - "1.de.pool.ntp.org"
+os_timezone: "Europe/Berlin"
+os_audit_enabled: true
+os_unattended_upgrades: true
+
+# ── Pfade (relativ zum Playbook-Verzeichnis) ──────────────────────────────────
+# Werden in den Rollen überschrieben wenn nötig
+infra_ssh_keys_dir: "{{ playbook_dir }}/../../ssh_keys"
+infra_reports_dir: "{{ playbook_dir }}/../../reports"
+
+# ── Vault-Variablen referenzieren ─────────────────────────────────────────────
+# Werte kommen aus inventory/group_vars/all/vault.yml (verschlüsselt)
+ssh_key_passphrase:          "{{ vault_ssh_key_passphrase | default('') }}"
+syslog_tls_ca_cert:          "{{ vault_syslog_tls_ca_cert | default('') }}"
+syslog_tls_client_cert:      "{{ vault_syslog_tls_client_cert | default('') }}"
+syslog_tls_client_key:       "{{ vault_syslog_tls_client_key | default('') }}"
+aide_alert_mail:             "{{ vault_aide_alert_mail | default('') }}"
+aide_webhook_url:            "{{ vault_alert_webhook_url | default('') }}"
+bootloader_grub_password:    "{{ vault_bootloader_grub_password | default('') }}"

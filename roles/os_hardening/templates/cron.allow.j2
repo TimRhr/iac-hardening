@@ -1,0 +1,9 @@
+# =============================================================================
+# /etc/cron.allow — Whitelist für erlaubte cron-Nutzer
+# Generiert von Ansible OS Hardening Role (BSI SYS.1.3 / CIS 5.1)
+# NUR die hier aufgeführten User dürfen crontab nutzen.
+# =============================================================================
+root
+{% for user in cron_allow_users %}
+{{ user }}
+{% endfor %}

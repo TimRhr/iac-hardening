@@ -1,0 +1,21 @@
+---
+# =============================================================================
+# OS Hardening | Unsichere Kernel-Module deaktivieren
+# =============================================================================
+
+- name: "Module | Erstelle modprobe-Blacklist"
+  ansible.builtin.template:
+    src: modprobe-hardening.conf.j2
+    dest: /etc/modprobe.d/hardening-blacklist.conf
+    owner: root
+    group: root
+    mode: "0644"
+  tags: [os, modules]
+
+- name: "Module | Module sofort entladen (falls geladen)"
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: absent
+  loop: "{{ os_kernel_modules_disable }}"
+  failed_when: false    # Modul vielleicht schon nicht geladen
+  tags: [os, modules]

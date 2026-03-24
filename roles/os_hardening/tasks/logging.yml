@@ -1,0 +1,398 @@
+---
+# =============================================================================
+# OS Hardening | Logging — Remote-Syslog & journald
+# BSI OPS.1.1.5 · CIS 6.2
+#
+# Architektur:
+#   Client-Modus (Standard): Sendet alle Logs → zentraler Syslog-Server
+#   Server-Modus:            Empfängt Logs von anderen Hosts (opt-in)
+#
+# Unterstützte Protokolle:
+#   UDP/514   — Legacy, kein Verbindungsstatus
+#   TCP/514   — Zuverlässig, Verbindungsstatus
+#   TCP/6514  — TLS-verschlüsselt (BSI empfohlen für sensible Daten)
+#
+# Ablauf:
+#   1. Pre-Flight: Remote-Server erreichbar?
+#   2. Pakete installieren
+#   3. journald konfigurieren (persistent + optional ForwardToSyslog)
+#   4. rsyslog Client-Konfiguration deployen
+#   5. Optional: rsyslog Server-Konfiguration deployen
+#   6. Optional: TLS-Zertifikate deployen
+#   7. rsyslog Syntax validieren + Service starten
+#   8. Konnektivitätstest: Test-Nachricht senden
+#   9. Auditd-Remote-Plugin konfigurieren (audisp-remote)
+#  10. Auditd-Regeln für Logging-Infrastruktur selbst
+# =============================================================================
+
+# ── 1. Pre-Flight ──────────────────────────────────────────────────────────────
+
+- name: "Logging | Pre-Flight | Remote-Server konfiguriert?"
+  ansible.builtin.debug:
+    msg: >-
+      ⚠️  Kein Remote-Syslog-Server konfiguriert (syslog_remote_host ist leer).
+      Lokales Logging wird gehärtet, Forwarding wird übersprungen.
+      Setze 'syslog_remote_host' in group_vars um Remote-Forwarding zu aktivieren.
+  when:
+    - syslog_remote_enabled | default(true)
+    - syslog_remote_host | default('') == ''
+  tags: [os, logging, preflight]
+
+- name: "Logging | Pre-Flight | TCP-Erreichbarkeit prüfen"
+  ansible.builtin.wait_for:
+    host: "{{ syslog_remote_host }}"
+    port: "{{ syslog_remote_port }}"
+    timeout: 10
+    state: started
+  register: syslog_reachability
+  ignore_errors: true
+  when:
+    - syslog_remote_enabled | default(true)
+    - syslog_remote_host | default('') != ''
+    - syslog_remote_protocol in ['tcp', 'tls']
+  tags: [os, logging, preflight]
+
+- name: "Logging | Pre-Flight | WARNUNG — Remote-Server nicht erreichbar"
+  ansible.builtin.debug:
+    msg: >-
+      ⚠️  Remote-Syslog-Server {{ syslog_remote_host }}:{{ syslog_remote_port }}
+      nicht erreichbar. Konfiguration wird trotzdem deployt (Queue puffert Logs).
+  when:
+    - syslog_reachability is defined
+    - syslog_reachability is failed
+  tags: [os, logging, preflight]
+
+# ── 2. Pakete ─────────────────────────────────────────────────────────────────
+
+- name: "Logging | Pakete installieren (Debian/Ubuntu)"
+  ansible.builtin.apt:
+    name: "{{ syslog_packages_debian }}"
+    state: present
+    update_cache: false
+  when: ansible_os_family == 'Debian'
+  tags: [os, logging, packages]
+
+- name: "Logging | Pakete installieren (RHEL/Rocky)"
+  ansible.builtin.dnf:
+    name: "{{ syslog_packages_rhel }}"
+    state: present
+  when: ansible_os_family == 'RedHat'
+  tags: [os, logging, packages]
+
+# ── 3. journald konfigurieren ─────────────────────────────────────────────────
+
+- name: "Logging | journald | Konfigurationsverzeichnis sicherstellen"
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [os, logging, journald]
+
+- name: "Logging | journald | Gehärtete Konfiguration deployen"
+  ansible.builtin.template:
+    src: journald.conf.j2
+    dest: /etc/systemd/journald.conf.d/99-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart journald
+  tags: [os, logging, journald]
+
+- name: "Logging | journald | Persistentes Log-Verzeichnis anlegen"
+  ansible.builtin.file:
+    path: /var/log/journal
+    state: directory
+    owner: root
+    group: systemd-journal
+    mode: "02755"
+  notify: Restart journald
+  tags: [os, logging, journald]
+
+# ── 4. rsyslog Client-Konfiguration ──────────────────────────────────────────
+
+- name: "Logging | rsyslog | Backup der originalen Konfiguration"
+  ansible.builtin.copy:
+    src: /etc/rsyslog.conf
+    dest: /etc/rsyslog.conf.orig
+    remote_src: true
+    force: false
+    mode: "0640"
+  failed_when: false
+  tags: [os, logging, rsyslog]
+
+- name: "Logging | rsyslog | Konfigurations-Verzeichnis absichern"
+  ansible.builtin.file:
+    path: /etc/rsyslog.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  tags: [os, logging, rsyslog]
+
+- name: "Logging | rsyslog | Alte remote-Konfigurationen bereinigen"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/rsyslog.d/50-default-remote.conf
+    - /etc/rsyslog.d/remote.conf
+  tags: [os, logging, rsyslog]
+
+- name: "Logging | rsyslog | Basis rsyslog.conf deployen (gehärtet)"
+  ansible.builtin.template:
+    src: rsyslog.conf.j2
+    dest: /etc/rsyslog.conf
+    owner: root
+    group: root
+    mode: "0640"
+    validate: "rsyslogd -N1 -f %s"
+  notify: Restart rsyslog
+  tags: [os, logging, rsyslog]
+
+- name: "Logging | rsyslog | Client-Konfiguration deployen (Remote-Forwarding)"
+  ansible.builtin.template:
+    src: rsyslog-client.conf.j2
+    dest: /etc/rsyslog.d/10-remote-client.conf
+    owner: root
+    group: root
+    mode: "0640"
+    validate: "rsyslogd -N1 -f %s"
+  when:
+    - syslog_remote_enabled | default(true)
+    - syslog_remote_host | default('') != ''
+  notify: Restart rsyslog
+  tags: [os, logging, rsyslog, client]
+
+- name: "Logging | rsyslog | Client-Konfiguration entfernen (wenn deaktiviert)"
+  ansible.builtin.file:
+    path: /etc/rsyslog.d/10-remote-client.conf
+    state: absent
+  when: not (syslog_remote_enabled | default(true))
+  notify: Restart rsyslog
+  tags: [os, logging, rsyslog, client]
+
+# ── 5. TLS-Zertifikate deployen (optional) ────────────────────────────────────
+
+- name: "Logging | TLS | Zertifikats-Verzeichnis anlegen"
+  ansible.builtin.file:
+    path: "{{ syslog_tls_cert_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: syslog_remote_protocol == 'tls'
+  tags: [os, logging, tls]
+
+- name: "Logging | TLS | CA-Zertifikat deployen"
+  ansible.builtin.copy:
+    content: "{{ syslog_tls_ca_cert }}"
+    dest: "{{ syslog_tls_cert_dir }}/ca.pem"
+    owner: root
+    group: root
+    mode: "0600"
+  when:
+    - syslog_remote_protocol == 'tls'
+    - syslog_tls_ca_cert | default('') != ''
+  notify: Restart rsyslog
+  tags: [os, logging, tls]
+
+- name: "Logging | TLS | Client-Zertifikat deployen"
+  ansible.builtin.copy:
+    content: "{{ syslog_tls_client_cert }}"
+    dest: "{{ syslog_tls_cert_dir }}/client-cert.pem"
+    owner: root
+    group: root
+    mode: "0600"
+  when:
+    - syslog_remote_protocol == 'tls'
+    - syslog_tls_client_cert | default('') != ''
+  notify: Restart rsyslog
+  tags: [os, logging, tls]
+
+- name: "Logging | TLS | Client-Key deployen"
+  ansible.builtin.copy:
+    content: "{{ syslog_tls_client_key }}"
+    dest: "{{ syslog_tls_cert_dir }}/client-key.pem"
+    owner: root
+    group: root
+    mode: "0400"
+  when:
+    - syslog_remote_protocol == 'tls'
+    - syslog_tls_client_key | default('') != ''
+  notify: Restart rsyslog
+  tags: [os, logging, tls]
+
+# ── 6. rsyslog Server-Konfiguration (opt-in) ──────────────────────────────────
+
+- name: "Logging | Server | Server-Konfiguration deployen"
+  ansible.builtin.template:
+    src: rsyslog-server.conf.j2
+    dest: /etc/rsyslog.d/00-server.conf
+    owner: root
+    group: root
+    mode: "0640"
+    validate: "rsyslogd -N1 -f %s"
+  when: syslog_server_enabled | default(false)
+  notify: Restart rsyslog
+  tags: [os, logging, rsyslog, server]
+
+- name: "Logging | Server | Server-Konfiguration entfernen (wenn deaktiviert)"
+  ansible.builtin.file:
+    path: /etc/rsyslog.d/00-server.conf
+    state: absent
+  when: not (syslog_server_enabled | default(false))
+  notify: Restart rsyslog
+  tags: [os, logging, rsyslog, server]
+
+- name: "Logging | Server | Firewall-Port für Syslog-Empfang öffnen (UFW)"
+  community.general.ufw:
+    rule: allow
+    port: "{{ syslog_server_port | string }}"
+    proto: "{{ 'tcp' if syslog_server_protocol in ['tcp','tls'] else 'udp' }}"
+    comment: "Remote Syslog Server — ansible-managed"
+  when:
+    - syslog_server_enabled | default(false)
+    - ansible_os_family == 'Debian'
+  tags: [os, logging, server, firewall]
+
+- name: "Logging | Server | Log-Empfangs-Verzeichnis anlegen"
+  ansible.builtin.file:
+    path: "{{ syslog_server_log_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  when: syslog_server_enabled | default(false)
+  tags: [os, logging, server]
+
+# ── 7. rsyslog Service starten ────────────────────────────────────────────────
+
+- name: "Logging | rsyslog | Handler sofort ausführen"
+  ansible.builtin.meta: flush_handlers
+  tags: [os, logging, rsyslog]
+
+- name: "Logging | rsyslog | Service aktivieren und starten"
+  ansible.builtin.service:
+    name: rsyslog
+    state: started
+    enabled: true
+  tags: [os, logging, rsyslog]
+
+- name: "Logging | rsyslog | Konfiguration validieren"
+  ansible.builtin.command: rsyslogd -N1
+  register: rsyslog_validation
+  changed_when: false
+  failed_when: rsyslog_validation.rc != 0
+  tags: [os, logging, rsyslog, validate]
+
+# ── 8. Konnektivitätstest ─────────────────────────────────────────────────────
+
+- name: "Logging | Test | Test-Nachricht an Remote-Server senden"
+  ansible.builtin.command: >-
+    logger -p auth.info -t "ansible-test"
+    "BSI OPS.1.1.5 Remote-Syslog-Test von {{ inventory_hostname }} — {{ ansible_date_time.iso8601 }}"
+  changed_when: false
+  when:
+    - syslog_remote_enabled | default(true)
+    - syslog_remote_host | default('') != ''
+    - syslog_reachability is not failed
+  tags: [os, logging, test]
+
+- name: "Logging | Test | Warte kurz (Queue abarbeiten)"
+  ansible.builtin.pause:
+    seconds: 3
+  when:
+    - syslog_remote_enabled | default(true)
+    - syslog_remote_host | default('') != ''
+    - syslog_reachability is not failed
+  tags: [os, logging, test]
+
+- name: "Logging | Test | Konnektivitätsergebnis"
+  ansible.builtin.debug:
+    msg: >-
+      {{ '✅ Test-Nachricht gesendet an ' + syslog_remote_host + ':' + syslog_remote_port | string
+         if (syslog_reachability is not failed and syslog_remote_host | default('') != '')
+         else '⚠️  Konnektivitätstest übersprungen (Server nicht erreichbar oder nicht konfiguriert)' }}
+  tags: [os, logging, test]
+
+# ── 9. auditd Remote-Plugin (audisp-remote) ───────────────────────────────────
+
+- name: "Logging | auditd | audisp-remote Paket installieren (Debian/Ubuntu)"
+  ansible.builtin.apt:
+    name: audispd-plugins
+    state: present
+  when:
+    - ansible_os_family == 'Debian'
+    - syslog_auditd_remote_enabled | default(true)
+  tags: [os, logging, auditd]
+
+- name: "Logging | auditd | audisp-remote Konfiguration deployen"
+  ansible.builtin.template:
+    src: audisp-remote.conf.j2
+    dest: /etc/audit/plugins.d/au-remote.conf
+    owner: root
+    group: root
+    mode: "0640"
+  when: syslog_auditd_remote_enabled | default(true)
+  notify: Restart auditd
+  tags: [os, logging, auditd]
+
+- name: "Logging | auditd | audisp-remote Verbindungsparameter setzen"
+  ansible.builtin.template:
+    src: audisp-remote-conf.j2
+    dest: /etc/audit/audisp-remote.conf
+    owner: root
+    group: root
+    mode: "0640"
+  when: syslog_auditd_remote_enabled | default(true)
+  notify: Restart auditd
+  tags: [os, logging, auditd]
+
+# ── 10. Log-Rotation für Remote-Logs (Server-Modus) ──────────────────────────
+
+- name: "Logging | Server | Logrotate für empfangene Logs konfigurieren"
+  ansible.builtin.template:
+    src: logrotate-syslog-remote.j2
+    dest: /etc/logrotate.d/syslog-remote
+    owner: root
+    group: root
+    mode: "0644"
+  when: syslog_server_enabled | default(false)
+  tags: [os, logging, server, logrotate]
+
+# ── 11. Auditd-Regeln: Logging-Infrastruktur schützen ────────────────────────
+
+- name: "Logging | Auditd | Rsyslog-Konfiguration überwachen"
+  ansible.builtin.lineinfile:
+    path: /etc/audit/rules.d/99-hardening.rules
+    line: "{{ item }}"
+    state: present
+  loop:
+    - "# Remote-Logging — Konfigurationsschutz (BSI OPS.1.1.5)"
+    - "-w /etc/rsyslog.conf -p wa -k syslog-config"
+    - "-w /etc/rsyslog.d -p wa -k syslog-config"
+    - "-w /etc/systemd/journald.conf -p wa -k journald-config"
+    - "-w /etc/systemd/journald.conf.d -p wa -k journald-config"
+  notify: Reload audit rules
+  tags: [os, logging, auditd]
+
+# ── 12. Zusammenfassung ───────────────────────────────────────────────────────
+
+- name: "Logging | Zusammenfassung"
+  ansible.builtin.debug:
+    msg:
+      - "============================================="
+      - "  Remote-Logging konfiguriert"
+      - "  BSI OPS.1.1.5 · CIS 6.2"
+      - "============================================="
+      - "  Protokoll:      {{ syslog_remote_protocol | upper }}"
+      - "  Remote-Server:  {{ syslog_remote_host | default('(nicht konfiguriert)') }}:{{ syslog_remote_port }}"
+      - "  Forwarding:     {{ syslog_remote_enabled | default(true) }}"
+      - "  TLS:            {{ syslog_remote_protocol == 'tls' }}"
+      - "  Server-Modus:   {{ syslog_server_enabled | default(false) }}"
+      - "  journald:       persistent, ForwardToSyslog={{ syslog_journald_forward_to_syslog }}"
+      - "  auditd-Remote:  {{ syslog_auditd_remote_enabled | default(true) }}"
+      - "============================================="
+  tags: [os, logging, summary]

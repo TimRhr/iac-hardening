@@ -1,0 +1,161 @@
+---
+# =============================================================================
+# OS Hardening | Compliance-Report — Ist-Werte vom System lesen
+# =============================================================================
+
+- name: "Audit | Kernel-Version"
+  ansible.builtin.command: uname -r
+  register: audit_kernel
+  changed_when: false
+  tags: [os, audit]
+
+- name: "Audit | Kritische sysctl Ist-Werte lesen"
+  ansible.builtin.command: "sysctl {{ item }}"
+  loop:
+    - kernel.randomize_va_space
+    - net.ipv4.tcp_syncookies
+    - net.ipv4.ip_forward
+    - kernel.dmesg_restrict
+    - kernel.kptr_restrict
+    - kernel.yama.ptrace_scope
+    - fs.protected_symlinks
+    - fs.protected_hardlinks
+    - fs.suid_dumpable
+  register: audit_sysctl_values
+  changed_when: false
+  failed_when: false
+  tags: [os, audit]
+
+- name: "Audit | sysctl-Werte als Dictionary aufbereiten"
+  ansible.builtin.set_fact:
+    audit_sysctl_dict: >-
+      {{
+        audit_sysctl_dict | default({}) | combine(
+          { item.stdout.split(' = ')[0] | trim : item.stdout.split(' = ')[-1] | default('N/A') | trim }
+        )
+      }}
+  loop: "{{ audit_sysctl_values.results }}"
+  when:
+    - item.rc == 0
+    - "' = ' in item.stdout"
+  tags: [os, audit]
+
+- name: "Audit | Laufende Dienste prüfen"
+  ansible.builtin.service_facts:
+  tags: [os, audit]
+
+- name: "Audit | Auditd-Regelanzahl ermitteln"
+  ansible.builtin.command: auditctl -l
+  register: audit_rules_count
+  changed_when: false
+  failed_when: false
+  tags: [os, audit]
+
+- name: "Audit | Fail2ban aktive Jails ermitteln"
+  ansible.builtin.command: fail2ban-client status
+  register: audit_f2b_status
+  changed_when: false
+  failed_when: false
+  tags: [os, audit]
+
+- name: "Audit | PAM faillock-Status"
+  ansible.builtin.command: faillock
+  register: audit_faillock_status
+  changed_when: false
+  failed_when: false
+  tags: [os, audit]
+
+- name: "Audit | Offene Netzwerk-Ports (ss)"
+  ansible.builtin.command: ss -tlnp
+  register: audit_open_ports
+  changed_when: false
+  failed_when: false
+  tags: [os, audit]
+
+- name: "Audit | AIDE Datenbank-Status prüfen"
+  ansible.builtin.stat:
+    path: "{{ aide_db_dir }}/aide.db.gz"
+  register: audit_aide_db
+  tags: [os, audit]
+
+- name: "Audit | AIDE letzten Check-Timestamp lesen"
+  ansible.builtin.slurp:
+    src: "{{ aide_log_dir }}/aide-last-check.txt"
+  register: audit_aide_last_check
+  failed_when: false
+  tags: [os, audit]
+
+- name: "Audit | Lokales Report-Verzeichnis sicherstellen"
+  ansible.builtin.file:
+    path: "{{ os_report_dir }}"
+    state: directory
+    mode: "0750"
+  delegate_to: localhost
+  become: false
+  tags: [os, audit]
+
+- name: "Audit | Compliance-Report schreiben (Ist-Werte)"
+  ansible.builtin.copy:
+    content: |
+      ================================================================
+      OS HARDENING COMPLIANCE REPORT — IST-WERTE
+      ================================================================
+      Host:        {{ inventory_hostname }} ({{ ansible_host }})
+      Datum:       {{ ansible_date_time.iso8601 }}
+      OS:          {{ ansible_distribution }} {{ ansible_distribution_version }}
+      Kernel:      {{ audit_kernel.stdout }}
+      Architektur: {{ ansible_architecture }}
+      ----------------------------------------------------------------
+      DIENSTE (Ist-Status)
+      ----------------------------------------------------------------
+      auditd:              {{ ansible_facts.services['auditd.service'].state | default('nicht installiert') }}
+      fail2ban:            {{ ansible_facts.services['fail2ban.service'].state | default('nicht installiert') }}
+      unattended-upgrades: {{ ansible_facts.services['unattended-upgrades.service'].state | default('nicht installiert') }}
+      timesyncd:           {{ ansible_facts.services['systemd-timesyncd.service'].state | default('nicht installiert') }}
+      ----------------------------------------------------------------
+      KERNEL / SYSCTL (Ist-Werte)
+      ----------------------------------------------------------------
+      {% for key, val in (audit_sysctl_dict | default({})).items() %}
+      {{ key }}: {{ val }}
+      {% endfor %}
+      ----------------------------------------------------------------
+      AUDIT-REGELN
+      ----------------------------------------------------------------
+      Aktive Regeln: {{ audit_rules_count.stdout_lines | length }} Zeilen
+      ----------------------------------------------------------------
+      FAIL2BAN
+      ----------------------------------------------------------------
+      {{ audit_f2b_status.stdout | default('Fail2ban nicht verfügbar') }}
+      ----------------------------------------------------------------
+      AIDE
+      ----------------------------------------------------------------
+      Datenbank vorhanden: {{ audit_aide_db.stat.exists | default(false) }}
+      DB-Pfad:             {{ aide_db_dir }}/aide.db.gz
+      DB-Größe:            {{ (audit_aide_db.stat.size | default(0) / 1024) | round(1) }} KB
+      Letzter Check:       {{ (audit_aide_last_check.content | default('') | b64decode) | trim or 'noch kein Check' }}
+      ----------------------------------------------------------------
+      OFFENE PORTS (ss -tlnp)
+      ----------------------------------------------------------------
+      {{ audit_open_ports.stdout | default('Keine Daten') }}
+      ----------------------------------------------------------------
+      KONFIGURATION (Soll-Werte)
+      ----------------------------------------------------------------
+      umask:               {{ os_umask_default }}
+      Root gesperrt:       {{ os_root_password_lock }}
+      PW max. Tage:        {{ os_password_max_days }}
+      PW min. Tage:        {{ os_password_min_days }}
+      PAM min. PW-Länge:   {{ os_pam_password_minlen }}
+      PAM Lockout:         {{ os_pam_faillock_deny }} Versuche / {{ os_pam_faillock_unlock_time }}s
+      Timezone:            {{ os_timezone }}
+      NTP-Server:          {{ os_ntp_servers | join(', ') }}
+      ================================================================
+    dest: "{{ os_report_dir }}/{{ inventory_hostname }}_os_report_{{ ansible_date_time.date }}.txt"
+    mode: "0640"
+  delegate_to: localhost
+  become: false
+  tags: [os, audit]
+
+- name: "Audit | Report-Pfad anzeigen"
+  ansible.builtin.debug:
+    msg: "📋 OS-Report: {{ os_report_dir }}/{{ inventory_hostname }}_os_report_{{ ansible_date_time.date }}.txt"
+  tags: [os, audit]

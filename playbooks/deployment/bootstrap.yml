@@ -1,0 +1,103 @@
+---
+# =============================================================================
+# playbooks/deployment/bootstrap.yml — Ersteinrichtung neuer Server
+#
+# Legt den Deploy-User an, richtet sudo ein und hinterlegt SSH-Keys,
+# BEVOR das Hardening-Playbook ausgeführt wird.
+# Läuft einmalig mit root oder initialem Cloud-User.
+#
+# VERWENDUNG:
+#   # Mit root (z.B. frische Cloud-VM):
+#   ansible-playbook playbooks/deployment/bootstrap.yml \
+#     -u root --ask-pass --limit web01
+#
+#   # Mit Ubuntu-User (AWS/Hetzner Cloud-Init):
+#   ansible-playbook playbooks/deployment/bootstrap.yml \
+#     -u ubuntu -e "bootstrap_initial_user=ubuntu" --limit web01
+# =============================================================================
+
+- name: "🚀 Deployment | Bootstrap — Ersteinrichtung"
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    bootstrap_initial_user: root
+    bootstrap_deploy_user: "{{ ssh_deploy_user | default('deploy') }}"
+    bootstrap_deploy_groups: ["sudo", "ssh-users"]
+    bootstrap_admin_pubkey: ""     # Optional: eigener Admin-Key
+
+  tasks:
+    - name: "Bootstrap | Gruppe ssh-users erstellen"
+      ansible.builtin.group:
+        name: ssh-users
+        state: present
+      tags: [bootstrap, users]
+
+    - name: "Bootstrap | Deploy-User anlegen"
+      ansible.builtin.user:
+        name: "{{ bootstrap_deploy_user }}"
+        state: present
+        shell: /bin/bash
+        create_home: true
+        groups: "{{ bootstrap_deploy_groups }}"
+        append: true
+      tags: [bootstrap, users]
+
+    - name: "Bootstrap | .ssh Verzeichnis anlegen"
+      ansible.builtin.file:
+        path: "/home/{{ bootstrap_deploy_user }}/.ssh"
+        state: directory
+        owner: "{{ bootstrap_deploy_user }}"
+        group: "{{ bootstrap_deploy_user }}"
+        mode: "0700"
+      tags: [bootstrap, users]
+
+    - name: "Bootstrap | sudo ohne Passwort für Deploy-User"
+      ansible.builtin.copy:
+        content: |
+          # Ansible-managed — deploy user
+          {{ bootstrap_deploy_user }} ALL=(ALL) NOPASSWD: ALL
+        dest: "/etc/sudoers.d/{{ bootstrap_deploy_user }}"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: "visudo -cf %s"
+      tags: [bootstrap, sudo]
+
+    - name: "Bootstrap | Temporären Admin-Key hinterlegen (falls angegeben)"
+      ansible.posix.authorized_key:
+        user: "{{ bootstrap_deploy_user }}"
+        key: "{{ bootstrap_admin_pubkey }}"
+        state: present
+      when: bootstrap_admin_pubkey != ""
+      tags: [bootstrap, keys]
+
+    - name: "Bootstrap | Paketliste aktualisieren"
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 0
+      when: ansible_os_family == 'Debian'
+      tags: [bootstrap, packages]
+
+    - name: "Bootstrap | Basis-Pakete installieren"
+      ansible.builtin.package:
+        name:
+          - python3
+          - python3-pip
+          - curl
+          - vim
+          - git
+          - htop
+          - net-tools
+        state: present
+      tags: [bootstrap, packages]
+
+    - name: "Bootstrap | ✅ Bereit für Hardening"
+      ansible.builtin.debug:
+        msg:
+          - "✅ Bootstrap abgeschlossen: {{ inventory_hostname }}"
+          - "   Deploy-User: {{ bootstrap_deploy_user }}"
+          - "   Nächster Schritt:"
+          - "   ansible-playbook playbooks/hardening/site.yml --limit {{ inventory_hostname }}"
+      tags: [bootstrap]

@@ -1,0 +1,139 @@
+---
+# =============================================================================
+# OS Hardening | Cron-Zugriffskontrolle
+# BSI SYS.1.3 · CIS 5.1
+#
+# Whitelist-Konzept: Nur explizit erlaubte User dürfen cron/at nutzen.
+# Standardmäßig: nur root. Weitere User per cron_allow_users hinzufügen.
+# =============================================================================
+
+# ── Verzeichnis-Berechtigungen ────────────────────────────────────────────────
+
+- name: "Cron | Verzeichnis-Berechtigungen auf 700 (root only)"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    owner: root
+    group: root
+    mode: "0700"
+    state: directory
+  loop:
+    - /etc/cron.d
+    - /etc/cron.daily
+    - /etc/cron.hourly
+    - /etc/cron.monthly
+    - /etc/cron.weekly
+  failed_when: false
+  tags: [os, cron]
+
+- name: "Cron | /etc/crontab Berechtigungen (600 — nur root)"
+  ansible.builtin.file:
+    path: /etc/crontab
+    owner: root
+    group: root
+    mode: "0600"
+  failed_when: false
+  tags: [os, cron]
+
+- name: "Cron | /var/spool/cron Verzeichnis absichern"
+  ansible.builtin.file:
+    path: /var/spool/cron
+    owner: root
+    group: crontab
+    mode: "1730"
+    state: directory
+  failed_when: false
+  tags: [os, cron]
+
+# ── cron.allow Whitelist ──────────────────────────────────────────────────────
+
+- name: "Cron | cron.deny entfernen (wird durch cron.allow ersetzt)"
+  ansible.builtin.file:
+    path: /etc/cron.deny
+    state: absent
+  tags: [os, cron]
+
+- name: "Cron | cron.allow Whitelist deployen"
+  ansible.builtin.template:
+    src: cron.allow.j2
+    dest: /etc/cron.allow
+    owner: root
+    group: root
+    mode: "0600"
+  tags: [os, cron]
+
+# ── at.allow Whitelist ────────────────────────────────────────────────────────
+
+- name: "Cron | at.deny entfernen (wird durch at.allow ersetzt)"
+  ansible.builtin.file:
+    path: /etc/at.deny
+    state: absent
+  tags: [os, cron]
+
+- name: "Cron | at.allow Whitelist deployen"
+  ansible.builtin.template:
+    src: at.allow.j2
+    dest: /etc/at.allow
+    owner: root
+    group: root
+    mode: "0600"
+  tags: [os, cron]
+
+# ── Anacron absichern ─────────────────────────────────────────────────────────
+
+- name: "Cron | /etc/anacrontab Berechtigungen"
+  ansible.builtin.file:
+    path: /etc/anacrontab
+    owner: root
+    group: root
+    mode: "0600"
+  failed_when: false
+  tags: [os, cron]
+
+# ── Laufende Cron-Jobs prüfen ─────────────────────────────────────────────────
+
+- name: "Cron | Prüfe Cron-Jobs aller User (CIS 5.1.9)"
+  ansible.builtin.shell: |
+    for user in $(cut -d: -f1 /etc/passwd); do
+      crontab -l -u "$user" 2>/dev/null | grep -v '^#' | grep -v '^$' \
+        | while IFS= read -r line; do
+            echo "$user: $line"
+          done
+    done
+  args:
+    executable: /bin/bash
+  register: cron_all_jobs
+  changed_when: false
+  tags: [os, cron, audit]
+
+- name: "Cron | Jobs-Übersicht"
+  ansible.builtin.debug:
+    msg: "{{ cron_all_jobs.stdout_lines | default(['Keine Cron-Jobs gefunden']) }}"
+  tags: [os, cron, audit]
+
+# ── Auditd-Regeln für Cron ────────────────────────────────────────────────────
+
+- name: "Cron | Auditd-Regeln für Cron-Zugriff"
+  ansible.builtin.lineinfile:
+    path: /etc/audit/rules.d/99-hardening.rules
+    line: "{{ item }}"
+    state: present
+  loop:
+    - "# Cron-Härtung (BSI SYS.1.3 / CIS 5.1)"
+    - "-w /etc/cron.allow -p wa -k cron-allow"
+    - "-w /etc/at.allow -p wa -k at-allow"
+    - "-w /var/spool/cron -p wa -k cron-spool"
+  notify: Reload audit rules
+  tags: [os, cron, auditd]
+
+- name: "Cron | Zusammenfassung"
+  ansible.builtin.debug:
+    msg:
+      - "============================================="
+      - "  Cron-Zugriffskontrolle konfiguriert"
+      - "============================================="
+      - "  cron.allow:   {{ ([\"root\"] + cron_allow_users) | unique | join(', ') }}"
+      - "  at.allow:     {{ ([\"root\"] + cron_allow_users) | unique | join(', ') }}"
+      - "  cron.deny:    entfernt"
+      - "  at.deny:      entfernt"
+      - "============================================="
+  tags: [os, cron, summary]

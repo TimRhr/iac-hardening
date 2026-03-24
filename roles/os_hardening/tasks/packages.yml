@@ -1,0 +1,73 @@
+---
+# =============================================================================
+# OS Hardening | Pakete installieren & unsichere entfernen
+# Unterstützt Debian/Ubuntu und RHEL/Rocky/AlmaLinux
+# =============================================================================
+
+- name: "Pakete | Paketliste aktualisieren (Debian/Ubuntu)"
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+  when: ansible_os_family == 'Debian'
+  tags: [os, packages]
+
+- name: "Pakete | Paketliste aktualisieren (RHEL/Rocky)"
+  ansible.builtin.dnf:
+    update_cache: true
+  when: ansible_os_family == 'RedHat'
+  tags: [os, packages]
+
+# Debian/Ubuntu hat libpam-faillock erst ab Ubuntu 23.04 als eigenes Paket —
+# auf älteren Versionen ist faillock Teil von libpam-modules (bereits installiert).
+- name: "Pakete | Sicherheits-Pakete installieren (Debian/Ubuntu)"
+  ansible.builtin.apt:
+    name: "{{ os_packages_install_debian }}"
+    state: present
+  when: ansible_os_family == 'Debian'
+  tags: [os, packages]
+
+- name: "Pakete | Sicherheits-Pakete installieren (RHEL/Rocky)"
+  ansible.builtin.dnf:
+    name: "{{ os_packages_install_rhel }}"
+    state: present
+  when: ansible_os_family == 'RedHat'
+  tags: [os, packages]
+
+- name: "Pakete | Unsichere Dienste entfernen (Debian/Ubuntu)"
+  ansible.builtin.apt:
+    name: "{{ os_packages_remove + os_extra_packages_remove }}"
+    state: absent
+    purge: true       # Konfigurationsdateien ebenfalls entfernen
+    autoremove: true
+  when: ansible_os_family == 'Debian'
+  tags: [os, packages]
+
+- name: "Pakete | Unsichere Dienste entfernen (RHEL/Rocky)"
+  ansible.builtin.dnf:
+    name: "{{ os_packages_remove_rhel + os_extra_packages_remove }}"
+    state: absent     # kein purge — DNF kennt es nicht
+  when: ansible_os_family == 'RedHat'
+  tags: [os, packages]
+
+- name: "Pakete | Installierte Pakete erfassen (Debian)"
+  ansible.builtin.command: dpkg --get-selections
+  register: pkg_list
+  changed_when: false
+  when: ansible_os_family == 'Debian'
+  tags: [os, packages]
+
+- name: "Pakete | Installierte Pakete erfassen (RHEL)"
+  ansible.builtin.command: rpm -qa --qf "%{NAME}-%{VERSION}\n"
+  register: pkg_list
+  changed_when: false
+  when: ansible_os_family == 'RedHat'
+  tags: [os, packages]
+
+- name: "Pakete | rsyslog Spool-Verzeichnis anlegen"
+  ansible.builtin.file:
+    path: /var/spool/rsyslog
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  tags: [os, packages, logging]

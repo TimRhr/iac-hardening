@@ -1,0 +1,84 @@
+---
+# =============================================================================
+# playbooks/maintenance/update.yml — Paket-Updates & Patch-Management
+#
+# VERWENDUNG:
+#   ansible-playbook playbooks/maintenance/update.yml
+#   ansible-playbook playbooks/maintenance/update.yml --limit webservers
+#   ansible-playbook playbooks/maintenance/update.yml -e "reboot_if_needed=true"
+# =============================================================================
+
+- name: "🔄 Maintenance | System-Updates"
+  hosts: all
+  become: true
+  gather_facts: true
+  serial: "30%"          # Rollierendes Update — nie alle Server gleichzeitig
+
+  vars:
+    reboot_if_needed: false
+    update_cache_valid_time: 0    # Cache immer aktualisieren
+
+  tasks:
+    - name: "Update | Paketliste aktualisieren (Debian/Ubuntu)"
+      ansible.builtin.apt:
+        update_cache: true
+      when: ansible_os_family == 'Debian'
+      tags: [maintenance, update]
+
+    - name: "Update | Verfügbare Updates anzeigen"
+      ansible.builtin.command: apt list --upgradable 2>/dev/null
+      register: available_updates
+      changed_when: false
+      when: ansible_os_family == 'Debian'
+      tags: [maintenance, update]
+
+    - name: "Update | Pakete aktualisieren (Debian/Ubuntu)"
+      ansible.builtin.apt:
+        upgrade: safe
+        autoremove: true
+        autoclean: true
+      register: apt_result
+      when: ansible_os_family == 'Debian'
+      tags: [maintenance, update]
+
+    - name: "Update | Pakete aktualisieren (RHEL/Rocky)"
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_cache: true
+      register: yum_result
+      when: ansible_os_family == 'RedHat'
+      tags: [maintenance, update]
+
+    - name: "Update | Prüfe ob Reboot nötig ist"
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required_file
+      when: ansible_os_family == 'Debian'
+      tags: [maintenance, update, reboot]
+
+    - name: "Update | ⚠️  Reboot benötigt"
+      ansible.builtin.debug:
+        msg: "⚠️  {{ inventory_hostname }} benötigt einen Reboot!"
+      when:
+        - ansible_os_family == 'Debian'
+        - reboot_required_file.stat.exists
+      tags: [maintenance, update, reboot]
+
+    - name: "Update | Server neu starten (wenn reboot_if_needed=true)"
+      ansible.builtin.reboot:
+        reboot_timeout: 300
+        msg: "Reboot durch Ansible Maintenance Playbook"
+      when:
+        - reboot_if_needed | bool
+        - ansible_os_family == 'Debian'
+        - reboot_required_file.stat.exists
+      tags: [maintenance, update, reboot]
+
+    - name: "Update | Zusammenfassung"
+      ansible.builtin.debug:
+        msg:
+          - "Host: {{ inventory_hostname }}"
+          - "Updates: {{ apt_result.changed | default(false) }}"
+          - "Reboot nötig: {{ reboot_required_file.stat.exists | default(false) }}"
+      tags: [maintenance, update]

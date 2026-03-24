@@ -1,0 +1,88 @@
+---
+# =============================================================================
+# playbooks/deployment/syslog_server.yml
+# Richtet einen dedizierten zentralen Syslog-Server ein.
+# BSI OPS.1.1.5 — Zentrale, manipulationssichere Protokollierung
+#
+# VERWENDUNG:
+#   # Zentralen Syslog-Server einrichten
+#   ansible-playbook playbooks/deployment/syslog_server.yml --limit mon01
+#
+#   # Clients auf diesen Server zeigen lassen
+#   # In group_vars/all/main.yml setzen:
+#   #   syslog_remote_host: "192.168.1.30"   # IP des Syslog-Servers
+#   #   syslog_remote_protocol: "tcp"
+#   ansible-playbook playbooks/hardening/site.yml --tags logging
+# =============================================================================
+
+- name: "Bootstrap | Python sicherstellen"
+  hosts: "{{ target | default('monitoring') }}"
+  gather_facts: false
+  become: true
+  tags: [always]
+  tasks:
+    - ansible.builtin.raw: |
+        test -e /usr/bin/python3 || (apt-get update -qq && apt-get install -y python3)
+      changed_when: false
+
+- name: "📡 Zentraler Syslog-Server"
+  hosts: "{{ target | default('monitoring') }}"
+  become: true
+  gather_facts: true
+
+  vars:
+    # Server-Modus aktivieren
+    syslog_server_enabled: true
+    syslog_server_protocol: "tcp"
+    syslog_server_port: 514
+    syslog_server_log_dir: "/var/log/remote"
+    syslog_server_log_rotate_days: 90
+
+    # Dieser Host leitet selbst NICHT weiter (er IST der Server)
+    syslog_remote_enabled: false
+
+  pre_tasks:
+    - name: "Info | Syslog-Server einrichten"
+      ansible.builtin.debug:
+        msg:
+          - "Richte zentralen Syslog-Server ein: {{ inventory_hostname }}"
+          - "Empfangs-Port: {{ syslog_server_port }}/{{ syslog_server_protocol | upper }}"
+          - "Log-Verzeichnis: {{ syslog_server_log_dir }}"
+          - "Aufbewahrung: {{ syslog_server_log_rotate_days }} Tage"
+      tags: [always]
+
+    - name: "Vorbereitung | Report-Verzeichnis"
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../../reports"
+        state: directory
+        mode: "0750"
+      delegate_to: localhost
+      become: false
+      tags: [always]
+
+  roles:
+    - role: os_hardening
+      tags: [os, hardening]
+
+  post_tasks:
+    - name: "Verifizierung | rsyslog lauscht auf Port {{ syslog_server_port }}"
+      ansible.builtin.command: "ss -tlnp sport = :{{ syslog_server_port }}"
+      register: syslog_port_check
+      changed_when: false
+      tags: [verify]
+
+    - name: "Verifizierung | Port-Status"
+      ansible.builtin.debug:
+        msg: "{{ syslog_port_check.stdout_lines }}"
+      tags: [verify]
+
+    - name: "✅ Syslog-Server bereit"
+      ansible.builtin.debug:
+        msg:
+          - "Zentraler Syslog-Server eingerichtet: {{ inventory_hostname }}"
+          - "Clients konfigurieren:"
+          - "  syslog_remote_host: '{{ ansible_host }}'"
+          - "  syslog_remote_port: {{ syslog_server_port }}"
+          - "  syslog_remote_protocol: '{{ syslog_server_protocol }}'"
+          - "Logs werden gespeichert unter: {{ syslog_server_log_dir }}/<hostname>/<datum>/"
+      tags: [always]

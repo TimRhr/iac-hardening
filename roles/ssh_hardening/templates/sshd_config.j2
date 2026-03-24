@@ -1,0 +1,96 @@
+# =============================================================================
+# sshd_config - Generiert von Ansible SSH Hardening Role
+# Letzte Änderung: {{ ansible_date_time.date }} | Host: {{ inventory_hostname }}
+# WARNUNG: Diese Datei wird von Ansible verwaltet - manuelle Änderungen
+#          werden beim nächsten Ansible-Run überschrieben!
+# =============================================================================
+
+# --- Netzwerk & Protokoll ----------------------------------------------------
+Port {{ ssh_port }}
+AddressFamily inet
+ListenAddress {{ ssh_listen_address }}
+# Protocol 2 ist der einzige unterstützte Wert seit OpenSSH 7.0 — keine Angabe nötig
+
+# --- Host Keys (nur moderne Algorithmen) -------------------------------------
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_rsa_key
+
+# --- Kryptographie -----------------------------------------------------------
+Ciphers {{ ssh_ciphers | join(',') }}
+MACs {{ ssh_macs | join(',') }}
+KexAlgorithms {{ ssh_kex_algorithms | join(',') }}
+HostKeyAlgorithms {{ ssh_host_key_algorithms | join(',') }}
+
+# --- Authentifizierung -------------------------------------------------------
+LoginGraceTime {{ ssh_login_grace_time }}
+PermitRootLogin {{ ssh_permit_root_login }}
+StrictModes yes
+MaxAuthTries {{ ssh_max_auth_tries }}
+MaxSessions {{ ssh_max_sessions }}
+MaxStartups {{ ssh_max_startups }}
+
+PubkeyAuthentication {{ ssh_pubkey_authentication }}
+AuthorizedKeysFile .ssh/authorized_keys
+
+PasswordAuthentication {{ ssh_password_authentication }}
+PermitEmptyPasswords {{ ssh_permit_empty_passwords }}
+# ChallengeResponseAuthentication und KbdInteractiveAuthentication sind seit
+# OpenSSH 8.7 ein Alias — nur eine Direktive verwenden
+KbdInteractiveAuthentication {{ ssh_challenge_response }}
+
+UsePAM {{ ssh_use_pam }}
+
+# --- Zugriffskontrolle -------------------------------------------------------
+{% if ssh_allow_users | length > 0 %}
+AllowUsers {{ ssh_allow_users | join(' ') }}
+{% endif %}
+{% if ssh_allow_groups | length > 0 %}
+AllowGroups {{ ssh_allow_groups | join(' ') }}
+{% endif %}
+{% if ssh_deny_users | length > 0 %}
+DenyUsers {{ ssh_deny_users | join(' ') }}
+{% endif %}
+{% if ssh_deny_groups | length > 0 %}
+DenyGroups {{ ssh_deny_groups | join(' ') }}
+{% endif %}
+
+# --- Verbindungsverhalten ----------------------------------------------------
+ClientAliveInterval {{ ssh_client_alive_interval }}
+ClientAliveCountMax {{ ssh_client_alive_count_max }}
+TCPKeepAlive {{ ssh_tcp_keep_alive }}
+
+# --- Deaktivierte Features ---------------------------------------------------
+X11Forwarding {{ ssh_x11_forwarding }}
+AllowAgentForwarding {{ ssh_agent_forwarding }}
+AllowTcpForwarding {{ ssh_tcp_forwarding }}
+GatewayPorts {{ ssh_gateway_ports }}
+PermitTunnel {{ ssh_permit_tunnel }}
+
+# --- Sonstiges ---------------------------------------------------------------
+PrintMotd {{ ssh_print_motd }}
+PrintLastLog {{ ssh_print_last_log }}
+UseDNS {{ ssh_use_dns }}
+Compression {{ ssh_compression }}
+
+# --- Logging -----------------------------------------------------------------
+SyslogFacility {{ ssh_syslog_facility }}
+LogLevel {{ ssh_log_level }}
+
+# --- Banner ------------------------------------------------------------------
+{% if ssh_banner_enabled %}
+Banner {{ ssh_banner_path }}
+{% endif %}
+
+# --- SFTP Subsystem ----------------------------------------------------------
+{% if ssh_sftp_enabled %}
+Subsystem sftp /usr/lib/openssh/sftp-server
+{% if ssh_sftp_chroot_group != "" %}
+
+# SFTP Chroot für Gruppe {{ ssh_sftp_chroot_group }}
+Match Group {{ ssh_sftp_chroot_group }}
+    ChrootDirectory /home/%u
+    ForceCommand internal-sftp
+    AllowTcpForwarding no
+    X11Forwarding no
+{% endif %}
+{% endif %}

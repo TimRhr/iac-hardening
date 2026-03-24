@@ -1,0 +1,87 @@
+---
+# =============================================================================
+# playbooks/maintenance/aide_reinit.yml
+# AIDE Datenbank neu erstellen — nach geplanten Systemänderungen ausführen
+#
+# WANN ausführen:
+#   - Nach Paket-Updates (neue Binaries)
+#   - Nach geplanten Konfigurationsänderungen
+#   - Nach Betriebssystem-Upgrades
+#   - Wenn AIDE zu viele "false positives" meldet
+#
+# VERWENDUNG:
+#   ansible-playbook playbooks/maintenance/aide_reinit.yml
+#   ansible-playbook playbooks/maintenance/aide_reinit.yml --limit web01
+#   ansible-playbook playbooks/maintenance/aide_reinit.yml -e "aide_backup_old=false"
+# =============================================================================
+
+- name: "AIDE | Datenbank neu initialisieren"
+  hosts: all
+  become: true
+  gather_facts: true
+  serial: 1              # Immer nur einen Server gleichzeitig
+
+  vars:
+    aide_backup_old: true           # Alte DB sichern bevor neu erstellt wird
+    aide_reinit_reason: "manuell"   # Grund für die Neuerstellung (wird geloggt)
+
+  tasks:
+    - name: "AIDE reinit | Bestätigung anzeigen"
+      ansible.builtin.debug:
+        msg:
+          - "AIDE Datenbank wird NEU ERSTELLT auf: {{ inventory_hostname }}"
+          - "Grund: {{ aide_reinit_reason }}"
+          - "Aktuelle DB wird gesichert: {{ aide_backup_old }}"
+      tags: [aide, reinit]
+
+    - name: "AIDE reinit | Aktuelle DB sichern"
+      ansible.builtin.copy:
+        src: "{{ aide_db_dir }}/aide.db.gz"
+        dest: "{{ aide_db_dir }}/aide.db.before-reinit-{{ ansible_date_time.date }}.gz"
+        remote_src: true
+        mode: "0400"
+      when: aide_backup_old | bool
+      failed_when: false
+      tags: [aide, reinit]
+
+    - name: "AIDE reinit | Grund loggen"
+      ansible.builtin.shell: |
+        logger -t "aide" -p "security.notice" \
+          "AIDE DB Neuerstellung auf {{ inventory_hostname }}: {{ aide_reinit_reason }}"
+      changed_when: false
+      tags: [aide, reinit]
+
+    - name: "AIDE reinit | Neue Datenbank erstellen (async)"
+      ansible.builtin.command:
+        cmd: aide --config=/etc/aide/aide.conf --init
+      async: "{{ aide_init_timeout | default(1800) }}"
+      poll: 30
+      register: aide_reinit_result
+      tags: [aide, reinit]
+
+    - name: "AIDE reinit | Neue DB aktivieren"
+      ansible.builtin.shell: |
+        set -e
+        NEW="{{ aide_db_dir }}/aide.db.new.gz"
+        ACTIVE="{{ aide_db_dir }}/aide.db.gz"
+        [ -f "$NEW" ] || (echo "Keine neue DB gefunden!" && exit 1)
+        mv "$NEW" "$ACTIVE"
+        chmod 400 "$ACTIVE"
+        echo "DB aktiviert: $(stat -c '%y %n' $ACTIVE)"
+      register: db_activate
+      tags: [aide, reinit]
+
+    - name: "AIDE reinit | Timestamp aktualisieren"
+      ansible.builtin.copy:
+        content: "{{ ansible_date_time.iso8601 }} RC=0 REINIT ({{ aide_reinit_reason }})\n"
+        dest: "{{ aide_log_dir }}/aide-last-check.txt"
+        mode: "0640"
+      tags: [aide, reinit]
+
+    - name: "AIDE reinit | Ergebnis"
+      ansible.builtin.debug:
+        msg:
+          - "✅ AIDE DB erfolgreich neu erstellt auf {{ inventory_hostname }}"
+          - "   {{ db_activate.stdout }}"
+          - "   Naechster automatischer Check: {{ aide_cron_hour }}:{{ aide_cron_minute }} Uhr"
+      tags: [aide, reinit]

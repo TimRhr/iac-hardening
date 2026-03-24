@@ -1,0 +1,80 @@
+---
+# =============================================================================
+# SSH Hardening | Task-Datei: Firewall
+# Unterstützt UFW (Debian/Ubuntu) und firewalld (RHEL/Rocky/Alma)
+# =============================================================================
+
+# ---- UFW (Debian / Ubuntu) --------------------------------------------------
+
+- name: "Firewall | UFW installieren (Debian/Ubuntu)"
+  ansible.builtin.package:
+    name: ufw
+    state: present
+  when: ansible_os_family == 'Debian'
+  tags: [ssh, firewall]
+
+- name: "Firewall | UFW - Alte SSH-Regel (Port 22) entfernen falls Port geändert"
+  community.general.ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+    delete: true
+  when:
+    - ansible_os_family == 'Debian'
+    - ssh_port != 22
+  failed_when: false
+  tags: [ssh, firewall]
+
+- name: "Firewall | UFW - SSH-Port freigeben"
+  community.general.ufw:
+    rule: allow
+    port: "{{ ssh_port | string }}"
+    proto: tcp
+    comment: "SSH Hardening - ansible-managed"
+  when: ansible_os_family == 'Debian'
+  tags: [ssh, firewall]
+
+- name: "Firewall | UFW - Rate Limiting für SSH aktivieren (Brute-Force-Schutz)"
+  community.general.ufw:
+    rule: limit
+    port: "{{ ssh_port | string }}"
+    proto: tcp
+    comment: "SSH Rate Limit - ansible-managed"
+  when:
+    - ansible_os_family == 'Debian'
+    - ssh_firewall_rate_limit | default(true)
+  tags: [ssh, firewall]
+
+- name: "Firewall | UFW aktivieren (default deny incoming)"
+  community.general.ufw:
+    state: enabled
+    policy: deny
+    direction: incoming
+  when:
+    - ansible_os_family == 'Debian'
+    - ssh_firewall_enable | default(false)   # Vorsicht: nur aktivieren wenn sicher!
+  tags: [ssh, firewall]
+
+# ---- firewalld (RHEL / Rocky / AlmaLinux) -----------------------------------
+
+- name: "Firewall | firewalld - SSH-Port freigeben"
+  ansible.posix.firewalld:
+    port: "{{ ssh_port }}/tcp"
+    permanent: true
+    state: enabled
+    immediate: true
+  when: ansible_os_family == 'RedHat'
+  failed_when: false
+  tags: [ssh, firewall]
+
+- name: "Firewall | firewalld - Alten SSH-Port entfernen (falls geändert)"
+  ansible.posix.firewalld:
+    port: "22/tcp"
+    permanent: true
+    state: disabled
+    immediate: true
+  when:
+    - ansible_os_family == 'RedHat'
+    - ssh_port != 22
+  failed_when: false
+  tags: [ssh, firewall]

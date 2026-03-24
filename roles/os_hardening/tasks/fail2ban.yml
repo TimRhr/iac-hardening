@@ -1,0 +1,32 @@
+---
+# =============================================================================
+# OS Hardening | Fail2ban — Brute-Force-Schutz
+# =============================================================================
+
+- name: "Fail2ban | Konfiguration deployen"
+  ansible.builtin.template:
+    src: fail2ban.jail.j2
+    dest: /etc/fail2ban/jail.d/hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart fail2ban
+  tags: [os, fail2ban]
+
+- name: "Fail2ban | Service aktivieren und starten"
+  ansible.builtin.service:
+    name: fail2ban
+    state: started
+    enabled: true
+  tags: [os, fail2ban]
+
+- name: "Fail2ban | Status prüfen"
+  ansible.builtin.command: fail2ban-client status
+  register: fail2ban_status
+  changed_when: false
+  tags: [os, fail2ban]
+
+- name: "Fail2ban | Aktive Jails anzeigen"
+  ansible.builtin.debug:
+    msg: "{{ fail2ban_status.stdout_lines }}"
+  tags: [os, fail2ban]

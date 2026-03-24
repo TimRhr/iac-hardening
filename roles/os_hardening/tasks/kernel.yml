@@ -1,0 +1,106 @@
+---
+# =============================================================================
+# OS Hardening | Kernel-Parameter via sysctl
+# =============================================================================
+
+- name: "Kernel | Backup bestehender sysctl-Konfiguration"
+  ansible.builtin.shell: |
+    sysctl -a 2>/dev/null > /etc/sysctl.d/00-backup-original.conf
+  args:
+    creates: /etc/sysctl.d/00-backup-original.conf
+    executable: /bin/bash
+  changed_when: false
+  tags: [os, kernel, sysctl]
+
+- name: "Kernel | sysctl-Konfiguration deployen (Netzwerk)"
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_file: /etc/sysctl.d/99-hardening-network.conf
+    reload: true
+  loop: "{{ os_sysctl_network | dict2items }}"
+  tags: [os, kernel, sysctl, network]
+
+- name: "Kernel | sysctl-Konfiguration deployen (Kernel)"
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_file: /etc/sysctl.d/99-hardening-kernel.conf
+    reload: true
+  loop: "{{ os_sysctl_kernel | dict2items }}"
+  tags: [os, kernel, sysctl]
+
+- name: "Kernel | sysctl-Konfiguration deployen (Dateisystem)"
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_file: /etc/sysctl.d/99-hardening-fs.conf
+    reload: true
+  loop: "{{ os_sysctl_fs | dict2items }}"
+  tags: [os, kernel, sysctl, filesystem]
+
+- name: "Kernel | IPv6 deaktivieren"
+  ansible.posix.sysctl:
+    name: "{{ item }}"
+    value: "1"
+    state: present
+    sysctl_file: /etc/sysctl.d/99-hardening-ipv6.conf
+    reload: true
+  loop:
+    - net.ipv6.conf.all.disable_ipv6
+    - net.ipv6.conf.default.disable_ipv6
+    - net.ipv6.conf.lo.disable_ipv6
+  when: os_ipv6_disable | default(false)
+  tags: [os, kernel, ipv6]
+
+- name: "Kernel | IPv6 ICMP-Redirects ablehnen (auch wenn IPv6 aktiv)"
+  ansible.posix.sysctl:
+    name: "{{ item }}"
+    value: "0"
+    state: present
+    sysctl_file: /etc/sysctl.d/99-hardening-network.conf
+    reload: true
+  loop:
+    - net.ipv6.conf.all.accept_redirects
+    - net.ipv6.conf.default.accept_redirects
+  when: not (os_ipv6_disable | default(false))
+  tags: [os, kernel, sysctl, network, ipv6]
+
+- name: "Kernel | Core Dumps deaktivieren (limits.conf)"
+  ansible.builtin.blockinfile:
+    path: /etc/security/limits.conf
+    block: |
+      # Ansible OS Hardening — Core Dumps deaktiviert
+      * hard core 0
+      * soft core 0
+    marker: "# {mark} ANSIBLE MANAGED BLOCK — coredump"
+  when: not os_coredump_enabled | default(false)
+  tags: [os, kernel, coredump]
+
+- name: "Kernel | Core Dumps deaktivieren (sysctl)"
+  ansible.posix.sysctl:
+    name: fs.suid_dumpable
+    value: "0"
+    state: present
+    sysctl_file: /etc/sysctl.d/99-hardening-kernel.conf
+    reload: true
+  when: not os_coredump_enabled | default(false)
+  tags: [os, kernel, coredump]
+
+- name: "Kernel | Core Dumps deaktivieren (systemd)"
+  ansible.builtin.lineinfile:
+    path: /etc/systemd/coredump.conf
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    state: present
+  loop:
+    - { regexp: '^#?Storage=',  line: "Storage=none" }
+    - { regexp: '^#?ProcessSizeMax=', line: "ProcessSizeMax=0" }
+  when:
+    - not os_coredump_enabled | default(false)
+    - ansible_service_mgr == 'systemd'
+  failed_when: false
+  tags: [os, kernel, coredump]
