@@ -410,3 +410,17 @@ bootloader_disable_recovery: true        # Recovery-Mode deaktivieren
 bootloader_disable_os_prober: true       # Kein Auto-Detect anderer OS
 bootloader_extra_kernel_params: "apparmor=1 security=apparmor vsyscall=none page_poison=1 pti=on slab_nomerge init_on_alloc=1"
 bootloader_cmdline_default: "quiet splash"
+
+# ── Reports & Audit ──────────────────────────────────────────────────────────
+# Lokales Verzeichnis für Compliance-Reports (liegt in .gitignore)
+os_report_dir: "{{ playbook_dir }}/../../reports"
+
+# Audit-Report nach Hardening erstellen
+os_audit_enabled: true
+
+# ── sudo-Härtung ─────────────────────────────────────────────────────────────
+# Session-Timeout in Minuten (0 = jede sudo-Aktion braucht Passwort)
+os_sudo_timeout: 15
+
+# Verzeichnis für sudo-Logs (wird von sudoers-hardening.j2 referenziert)
+os_sudo_log_dir: "/var/log/sudo"

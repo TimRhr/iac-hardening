@@ -77,10 +77,10 @@
   no_log: true
   changed_when: false
   when:
+    - bootloader_grub_available | default(false)
     - bootloader_grub_password | default('') != ''
     - bootloader_mkpasswd_available.rc == 0
   tags: [os, bootloader, password]
-  when: bootloader_grub_available | default(false)
 
 - name: "Bootloader | GRUB-Passwort-Konfiguration deployen"
   ansible.builtin.template:
@@ -90,11 +90,11 @@
     group: root
     mode: "0700"
   when:
+    - bootloader_grub_available | default(false)
     - bootloader_grub_password | default('') != ''
     - bootloader_passwd_hash.stdout | default('') != ''
-  notify: Update grub
+  notify: update grub config
   tags: [os, bootloader, password]
-  when: bootloader_grub_available | default(false)
 
 # ── 4. /etc/default/grub härten ───────────────────────────────────────────────
 
@@ -115,7 +115,7 @@
     group: root
     mode: "0644"
     backup: true
-  notify: Update grub
+  notify: update grub config
   tags: [os, bootloader, config]
   when: bootloader_grub_available | default(false)
 
