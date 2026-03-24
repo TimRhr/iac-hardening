@@ -10,14 +10,12 @@
 
 # ── Lynis installieren ────────────────────────────────────────────────────────
 
-- name: "Lynis | Repository hinzufügen (Debian/Ubuntu)"
-- name: "Lynis | GPG-Schlüssel importieren (Debian/Ubuntu — modern)"
+- name: "Lynis | GPG-Schlüssel importieren (Debian/Ubuntu)"
   ansible.builtin.shell: |
     curl -fsSL https://packages.cisofy.com/keys/cisofy-software-public.key \
       | gpg --dearmor -o /usr/share/keyrings/cisofy-lynis.gpg
   args:
     executable: /bin/bash
-  args:
     creates: /usr/share/keyrings/cisofy-lynis.gpg
   when: ansible_os_family == 'Debian'
   failed_when: false
