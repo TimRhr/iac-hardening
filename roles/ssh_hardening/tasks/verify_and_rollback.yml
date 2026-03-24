@@ -24,11 +24,37 @@
   ignore_errors: true
   tags: [ssh, verify]
 
+- name: "Verify | Aktualisiere known_hosts nach sshd-Neustart (Host-Key kann sich geändert haben)"
+  ansible.builtin.command: >-
+    ssh-keyscan -p {{ ssh_port }} -H {{ ansible_host }}
+  register: verify_keyscan
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  failed_when: false
+  when: ssh_strict_host_checking | default(true)
+  tags: [ssh, verify]
+
+- name: "Verify | Schreibe aktuellen Host-Key in known_hosts"
+  ansible.builtin.blockinfile:
+    path: "{{ ssh_known_hosts_file }}"
+    block: "{{ verify_keyscan.stdout }}"
+    marker: "# {mark} ANSIBLE MANAGED: {{ inventory_hostname }}"
+    create: true
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  when:
+    - ssh_strict_host_checking | default(true)
+    - verify_keyscan.stdout | default('') | length > 0
+  tags: [ssh, verify]
+
 - name: "Verify | Teste tatsächlichen SSH-Login mit neuem Key"
   ansible.builtin.command: >
     ssh
     -i {{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519
-    -o StrictHostKeyChecking=no
+    -o UserKnownHostsFile={{ ssh_known_hosts_file }}
+    -o StrictHostKeyChecking=yes
     -o ConnectTimeout=10
     -o BatchMode=yes
     -p {{ ssh_port }}

@@ -130,7 +130,8 @@
   ansible.builtin.command: >-
     ssh
     -i {{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519.new
-    -o StrictHostKeyChecking=no
+    -o UserKnownHostsFile={{ ssh_known_hosts_file }}
+    -o StrictHostKeyChecking=accept-new
     -o ConnectTimeout=10
     -o BatchMode=yes
     -p {{ ssh_port }}

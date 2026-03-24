@@ -85,7 +85,6 @@
     mv /tmp/moduli_safe /etc/ssh/moduli
   args:
     executable: /bin/bash
-  args:
     creates: /etc/ssh/moduli.backup
   notify: Restart sshd
   tags: [ssh, hardening, crypto]
