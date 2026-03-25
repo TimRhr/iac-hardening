@@ -53,10 +53,14 @@
         mode: "0700"
       tags: [bootstrap, users]
 
-    - name: "Bootstrap | sudo ohne Passwort für Deploy-User"
+    - name: "Bootstrap | sudo ohne Passwort für Deploy-User (temporär — wird durch Hardening eingeschränkt)"
       ansible.builtin.copy:
         content: |
-          # Ansible-managed — deploy user
+          # Ansible-managed — deploy user (Bootstrap)
+          # ACHTUNG: NOPASSWD: ALL ist temporär für die Ersteinrichtung.
+          # Nach dem Hardening wird diese Datei durch sudo.yml auf minimale
+          # Befehle eingeschränkt (ssh_deploy_sudo_commands in group_vars).
+          # Hardening ausführen: ansible-playbook playbooks/hardening/site.yml
           {{ bootstrap_deploy_user }} ALL=(ALL) NOPASSWD: ALL
         dest: "/etc/sudoers.d/{{ bootstrap_deploy_user }}"
         owner: root
@@ -98,6 +102,9 @@
         msg:
           - "✅ Bootstrap abgeschlossen: {{ inventory_hostname }}"
           - "   Deploy-User: {{ bootstrap_deploy_user }}"
-          - "   Nächster Schritt:"
+          - "   sudo: NOPASSWD: ALL (temporär — wird durch Hardening eingeschränkt)"
+          - "   ─────────────────────────────────────────────────────────────"
+          - "   Nächster Schritt — Hardening ausführen:"
           - "   ansible-playbook playbooks/hardening/site.yml --limit {{ inventory_hostname }}"
+          - "   → Nach dem Hardening: sudo auf minimale Befehle eingeschränkt"
       tags: [bootstrap]

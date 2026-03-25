@@ -1,0 +1,56 @@
+---
+# =============================================================================
+# .github/workflows/molecule.yml
+# Molecule-Tests für ssh_hardening + os_hardening bei Pull Requests
+# =============================================================================
+name: Molecule Tests
+
+on:
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "roles/**"
+      - "requirements.yml"
+
+jobs:
+  molecule:
+    name: Molecule — ${{ matrix.role }} / ${{ matrix.scenario }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - role: ssh_hardening
+            scenario: default
+          - role: os_hardening
+            scenario: default
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Ansible Collections
+        run: |
+          if [ -f requirements.yml ]; then
+            ansible-galaxy collection install -r requirements.yml -p collections/
+          fi
+
+      - name: Run Molecule
+        run: molecule test --scenario-name ${{ matrix.scenario }}
+        working-directory: roles/${{ matrix.role }}
+        env:
+          ANSIBLE_ROLES_PATH: ${{ github.workspace }}/roles
+          ANSIBLE_COLLECTIONS_PATH: ${{ github.workspace }}/collections
+          PY_COLORS: "1"
+          ANSIBLE_FORCE_COLOR: "1"

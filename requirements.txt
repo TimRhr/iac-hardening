@@ -1,0 +1,7 @@
+# CI/CD Python-Abhängigkeiten für GitHub Actions
+# Wird von lint.yml, syntax-check.yml und molecule.yml verwendet (cache: pip)
+ansible-core>=2.16
+ansible-lint>=24.2
+yamllint>=1.35
+molecule>=24.0
+molecule-plugins[docker]>=23.5

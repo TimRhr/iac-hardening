@@ -67,8 +67,9 @@
 
 - name: "Bootloader | GRUB-Passwort-Hash aus Variable generieren"
   ansible.builtin.shell: |
+    MKPASSWD=$(command -v grub2-mkpasswd-pbkdf2 grub-mkpasswd-pbkdf2 2>/dev/null | head -1)
     echo -e "{{ bootloader_grub_password }}\n{{ bootloader_grub_password }}" \
-      | grub-mkpasswd-pbkdf2 2>/dev/null \
+      | "$MKPASSWD" 2>/dev/null \
       | grep "PBKDF2 hash" \
       | awk '{print $NF}'
   args:
@@ -77,10 +78,11 @@
   no_log: true
   changed_when: false
   when:
+    - bootloader_grub_available | default(false)
     - bootloader_grub_password | default('') != ''
-    - bootloader_mkpasswd_available.rc == 0
+    - (bootloader_mkpasswd_available.rc | default(1)) == 0 or
+      (bootloader_mkpasswd2_available.rc | default(1)) == 0
   tags: [os, bootloader, password]
-  when: bootloader_grub_available | default(false)
 
 - name: "Bootloader | GRUB-Passwort-Konfiguration deployen"
   ansible.builtin.template:
@@ -90,11 +92,11 @@
     group: root
     mode: "0700"
   when:
+    - bootloader_grub_available | default(false)
     - bootloader_grub_password | default('') != ''
     - bootloader_passwd_hash.stdout | default('') != ''
-  notify: Update grub
+  notify: update grub config
   tags: [os, bootloader, password]
-  when: bootloader_grub_available | default(false)
 
 # ── 4. /etc/default/grub härten ───────────────────────────────────────────────
 
@@ -115,7 +117,7 @@
     group: root
     mode: "0644"
     backup: true
-  notify: Update grub
+  notify: update grub config
   tags: [os, bootloader, config]
   when: bootloader_grub_available | default(false)
 

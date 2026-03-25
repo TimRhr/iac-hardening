@@ -5,9 +5,9 @@
 # Bei Fehler: automatischer Rollback auf gesicherte Konfiguration.
 # =============================================================================
 
-- name: "Verify | Warte kurz bis sshd neugestartet ist"
+- name: "Verify | Warte bis sshd neugestartet ist"
   ansible.builtin.wait_for:
-    timeout: 5
+    timeout: 15
   delegate_to: localhost
   become: false
   tags: [ssh, verify]

@@ -28,8 +28,6 @@
     echo "done"
   args:
     executable: /bin/bash
-  args:
-    executable: /bin/bash
   register: sticky_result
   changed_when: "'done' in sticky_result.stdout"
   tags: [os, filesystem]
@@ -40,8 +38,6 @@
     find / -xdev -type f -perm -0002 \
       -not -path "/proc/*" -not -path "/sys/*" -not -path "/dev/*" \
       2>/dev/null || true
-  args:
-    executable: /bin/bash
   args:
     executable: /bin/bash
   async: 120
@@ -57,8 +53,6 @@
       2>/dev/null || true
   args:
     executable: /bin/bash
-  args:
-    executable: /bin/bash
   async: 120
   poll: 0
   register: scan_unowned_job
@@ -69,8 +63,6 @@
   ansible.builtin.shell: |
     find / -xdev \( -perm -4000 -o -perm -2000 \) -type f \
       -not -path "/proc/*" 2>/dev/null | sort || true
-  args:
-    executable: /bin/bash
   args:
     executable: /bin/bash
   async: 120

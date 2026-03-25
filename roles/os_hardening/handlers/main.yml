@@ -46,11 +46,15 @@
   ansible.builtin.command: update-grub
   failed_when: false
   changed_when: true
+  when: ansible_os_family == 'Debian'
+  listen: "update grub config"
 
 - name: Update grub rhel
   ansible.builtin.command: grub2-mkconfig -o /boot/grub2/grub.cfg
   failed_when: false
   changed_when: true
+  when: ansible_os_family == 'RedHat'
+  listen: "update grub config"
 
 - name: Reload apparmor
   ansible.builtin.service:

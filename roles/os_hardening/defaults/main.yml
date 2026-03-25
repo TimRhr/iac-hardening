@@ -410,3 +410,49 @@ bootloader_disable_recovery: true        # Recovery-Mode deaktivieren
 bootloader_disable_os_prober: true       # Kein Auto-Detect anderer OS
 bootloader_extra_kernel_params: "apparmor=1 security=apparmor vsyscall=none page_poison=1 pti=on slab_nomerge init_on_alloc=1"
 bootloader_cmdline_default: "quiet splash"
+
+# ── Reports & Audit ──────────────────────────────────────────────────────────
+# Lokales Verzeichnis für Compliance-Reports (liegt in .gitignore)
+os_report_dir: "{{ playbook_dir }}/../../reports"
+
+# Audit-Report nach Hardening erstellen
+os_audit_enabled: true
+
+# ── sudo-Härtung ─────────────────────────────────────────────────────────────
+# Session-Timeout in Minuten (0 = jede sudo-Aktion braucht Passwort)
+os_sudo_timeout: 15
+
+# Verzeichnis für sudo-Logs (wird von sudoers-hardening.j2 referenziert)
+os_sudo_log_dir: "/var/log/sudo"
+
+# Deploy-User sudo nach Bootstrap einschränken (NOPASSWD: ALL → Befehls-Liste)
+# Bootstrap setzt NOPASSWD: ALL — Hardening ersetzt es durch diese Befehls-Liste.
+# false = Bootstrap-Konfiguration bleibt unverändert (NOPASSWD: ALL)
+os_restrict_deploy_sudo: true
+
+# Minimale sudo-Befehle die der Deploy-User ohne Passwort ausführen darf.
+# Nur relevant wenn os_restrict_deploy_sudo: true.
+# Ansible benötigt mindestens: Pakete, Dienste, Dateisystem-Operationen.
+ssh_deploy_sudo_commands:
+  - /usr/bin/apt-get
+  - /usr/bin/apt
+  - /usr/bin/dpkg
+  - /usr/bin/dnf
+  - /usr/bin/yum
+  - /bin/systemctl
+  - /usr/bin/systemctl
+  - /bin/cp
+  - /bin/mv
+  - /bin/chmod
+  - /bin/chown
+  - /usr/bin/tee
+  - /usr/bin/install
+  - /usr/sbin/useradd
+  - /usr/sbin/usermod
+  - /usr/sbin/userdel
+  - /sbin/augenrules
+  - /usr/sbin/augenrules
+  - /sbin/sysctl
+  - /usr/sbin/sysctl
+  - /usr/bin/rsync
+  - /usr/bin/find
