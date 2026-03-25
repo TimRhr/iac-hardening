@@ -251,3 +251,36 @@
       - "  Aktiver Key:    {{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519"
       - "============================================="
   tags: [ssh, rotation]
+
+# ── 9. Retirement-Archiv bereinigen ───────────────────────────────────────────
+# Retired Keys die älter als ssh_key_retention_days sind werden gelöscht.
+# Nur ausführen wenn das Host-Verzeichnis existiert.
+
+- name: "Key-Rotation | Suche veraltete retired Keys (> {{ ssh_key_retention_days }} Tage)"
+  ansible.builtin.find:
+    paths: "{{ ssh_key_local_dir }}/{{ inventory_hostname }}"
+    patterns: "id_ed25519.retired.*"
+    age: "{{ ssh_key_retention_days }}d"
+    age_stamp: mtime
+  register: rotation_expired_keys
+  delegate_to: localhost
+  become: false
+  failed_when: false
+  tags: [ssh, rotation, cleanup]
+
+- name: "Key-Rotation | Veraltete retired Keys löschen"
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ rotation_expired_keys.files | default([]) }}"
+  delegate_to: localhost
+  become: false
+  tags: [ssh, rotation, cleanup]
+
+- name: "Key-Rotation | Info — Retirement-Cleanup abgeschlossen"
+  ansible.builtin.debug:
+    msg: >-
+      🗑️  {{ rotation_expired_keys.files | default([]) | length }} veralteter
+      retired Key(s) gelöscht (Retention: {{ ssh_key_retention_days }} Tage).
+  when: (rotation_expired_keys.files | default([]) | length) > 0
+  tags: [ssh, rotation, cleanup]

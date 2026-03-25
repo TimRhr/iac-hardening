@@ -1,0 +1,184 @@
+---
+# =============================================================================
+# playbooks/monitoring/test_aide_alert.yml
+# Testet ob der AIDE-Alert-Mechanismus (Mail / Webhook) funktioniert.
+#
+# Ablauf:
+#   1. Prüfen ob AIDE konfiguriert und DB vorhanden ist
+#   2. Harmlose Test-Datei in überwachtem Pfad anlegen
+#   3. aide --check ausführen → erzeugt Report mit Test-Datei als "new entry"
+#   4. Alert-Skript direkt aufrufen und Ausgabe prüfen
+#   5. Test-Datei löschen
+#   6. AIDE DB aktualisieren (Baseline wiederherstellen)
+#
+# Verwendung:
+#   ansible-playbook playbooks/monitoring/test_aide_alert.yml
+#   ansible-playbook playbooks/monitoring/test_aide_alert.yml --limit webservers
+#   ansible-playbook playbooks/monitoring/test_aide_alert.yml \
+#     -e "aide_test_skip_alert_check=true"  # Nur AIDE-Check, kein Alert
+# =============================================================================
+- name: AIDE Alert Verification
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    # Pfad für Test-Datei (muss von AIDE überwacht sein)
+    aide_test_file: /etc/aide-alert-test.tmp
+    # Test-Nachricht im Alert
+    aide_test_marker: "AIDE-ALERT-TEST-{{ ansible_date_time.iso8601_basic_short }}"
+    # true = Alert-Skript-Ausführung überspringen (nur aide --check)
+    aide_test_skip_alert_check: false
+
+  tasks:
+
+    # ── 1. Voraussetzungen prüfen ─────────────────────────────────────────────
+
+    - name: "AIDE Alert Test | aide Binary prüfen"
+      ansible.builtin.command: which aide
+      register: aide_binary
+      changed_when: false
+      failed_when: false
+
+    - name: "AIDE Alert Test | AIDE nicht installiert — Abbruch"
+      ansible.builtin.fail:
+        msg: "AIDE ist nicht installiert. Bitte zuerst os_hardening mit aide_enabled: true ausführen."
+      when: aide_binary.rc != 0
+
+    - name: "AIDE Alert Test | AIDE-Datenbank prüfen"
+      ansible.builtin.stat:
+        path: /var/lib/aide/aide.db.gz
+      register: aide_db_stat
+
+    - name: "AIDE Alert Test | Keine AIDE-DB — Abbruch"
+      ansible.builtin.fail:
+        msg: |
+          AIDE-Datenbank nicht gefunden unter /var/lib/aide/aide.db.gz.
+          Bitte zuerst initialisieren:
+            ansible-playbook playbooks/hardening/os_only.yml --tags aide
+      when: not aide_db_stat.stat.exists
+
+    - name: "AIDE Alert Test | Alert-Skript prüfen"
+      ansible.builtin.stat:
+        path: /usr/local/lib/aide/aide-alert.sh
+      register: aide_alert_script_stat
+
+    # ── 2. Test-Datei anlegen (in überwachtem /etc/) ──────────────────────────
+
+    - name: "AIDE Alert Test | Test-Datei anlegen"
+      ansible.builtin.copy:
+        content: |
+          # AIDE Alert-Test — {{ aide_test_marker }}
+          # Diese Datei wurde automatisch angelegt um den AIDE-Alert zu testen.
+          # Wird nach dem Test automatisch gelöscht.
+          test_timestamp: {{ ansible_date_time.iso8601 }}
+          test_host: {{ inventory_hostname }}
+        dest: "{{ aide_test_file }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    # ── 3. AIDE Check ausführen (erkennt Test-Datei als "added") ─────────────
+
+    - name: "AIDE Alert Test | AIDE Check ausführen (kann mehrere Minuten dauern)"
+      ansible.builtin.command:
+        cmd: aide --config=/etc/aide/aide.conf --check
+      register: aide_check_result
+      changed_when: false
+      # RC 0 = keine Änderungen, RC 1 = Änderungen gefunden (erwartet), RC >1 = Fehler
+      failed_when: aide_check_result.rc > 1
+
+    - name: "AIDE Alert Test | AIDE Report anzeigen (Auszug)"
+      ansible.builtin.debug:
+        msg: "{{ aide_check_result.stdout_lines[-30:] }}"
+
+    - name: "AIDE Alert Test | Test-Datei wurde von AIDE erkannt"
+      ansible.builtin.assert:
+        that: aide_test_file in aide_check_result.stdout
+        fail_msg: |
+          Test-Datei {{ aide_test_file }} wurde von AIDE NICHT erkannt.
+          Mögliche Ursache: /etc/ ist nicht in der AIDE-Überwachung konfiguriert.
+        success_msg: "Test-Datei in AIDE-Report gefunden — OK"
+
+    # ── 4. Alert-Skript testen ────────────────────────────────────────────────
+
+    - name: "AIDE Alert Test | Alert-Skript direkt ausführen"
+      ansible.builtin.command:
+        cmd: >-
+          /usr/local/lib/aide/aide-alert.sh
+          "Alert-Test: {{ aide_test_marker }}"
+          "{{ aide_check_result.stdout | truncate(500, True, '...') }}"
+      register: aide_alert_result
+      changed_when: false
+      failed_when: false
+      when:
+        - aide_alert_script_stat.stat.exists
+        - not (aide_test_skip_alert_check | bool)
+
+    - name: "AIDE Alert Test | Alert-Skript Ergebnis anzeigen"
+      ansible.builtin.debug:
+        msg:
+          - "Exit-Code: {{ aide_alert_result.rc | default('übersprungen') }}"
+          - "Stdout:    {{ aide_alert_result.stdout | default('—') }}"
+          - "Stderr:    {{ aide_alert_result.stderr | default('—') }}"
+      when:
+        - aide_alert_script_stat.stat.exists
+        - not (aide_test_skip_alert_check | bool)
+
+    - name: "AIDE Alert Test | Warnung — Alert-Skript nicht vorhanden"
+      ansible.builtin.debug:
+        msg: "⚠️  Alert-Skript /usr/local/lib/aide/aide-alert.sh fehlt — Alert nicht testbar."
+      when: not aide_alert_script_stat.stat.exists
+
+    # ── 5. Test-Datei löschen ─────────────────────────────────────────────────
+
+    - name: "AIDE Alert Test | Test-Datei löschen"
+      ansible.builtin.file:
+        path: "{{ aide_test_file }}"
+        state: absent
+
+    # ── 6. AIDE DB aktualisieren (Baseline wiederherstellen) ──────────────────
+
+    - name: "AIDE Alert Test | AIDE DB aktualisieren (Baseline reset)"
+      ansible.builtin.command:
+        cmd: aide --config=/etc/aide/aide.conf --update
+      register: aide_update_result
+      changed_when: true
+      # RC 0 oder 1 sind OK (1 = Änderungen gesehen, aber Update trotzdem erfolgreich)
+      failed_when: aide_update_result.rc > 1
+
+    - name: "AIDE Alert Test | Neue DB als aktive DB aktivieren"
+      ansible.builtin.shell: |
+        set -e
+        NEW="{{ aide_db_dir | default('/var/lib/aide') }}/aide.db.new.gz"
+        ACTIVE="{{ aide_db_dir | default('/var/lib/aide') }}/aide.db.gz"
+        if [ -f "$NEW" ]; then
+          cp "$ACTIVE" "${ACTIVE}.before-test-$(date +%Y%m%d_%H%M%S)"
+          mv "$NEW" "$ACTIVE"
+          chmod 600 "$ACTIVE"
+          echo "Baseline aktualisiert: $ACTIVE"
+        else
+          echo "Keine neue DB gefunden — aide --update fehlgeschlagen?"
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    # ── 7. Zusammenfassung ────────────────────────────────────────────────────
+
+    - name: "AIDE Alert Test | ✅ Zusammenfassung"
+      ansible.builtin.debug:
+        msg:
+          - "========================================="
+          - "  AIDE Alert-Test"
+          - "========================================="
+          - "  Host:         {{ inventory_hostname }}"
+          - "  Test-Marker:  {{ aide_test_marker }}"
+          - "  AIDE Check:   {{ 'Änderungen erkannt (erwartet)' if aide_check_result.rc == 1 else 'Keine Änderungen (unerwartet)' }}"
+          - "  Alert-Skript: {{ 'ausgeführt (RC=' + (aide_alert_result.rc | string) + ')' if aide_alert_script_stat.stat.exists and not (aide_test_skip_alert_check | bool) else 'übersprungen' }}"
+          - "  Baseline:     aktualisiert"
+          - "========================================="
+          - "  WICHTIG: Prüfe ob die Alert-Nachricht"
+          - "  ankam (E-Mail / Webhook / Syslog)!"
+          - "========================================="

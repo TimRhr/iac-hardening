@@ -1,0 +1,40 @@
+---
+# =============================================================================
+# converge.yml — SSH-Hardening-Rolle im Docker-Container anwenden
+# =============================================================================
+- name: Converge
+  hosts: all
+  become: true
+
+  vars:
+    # ── Key Management deaktivieren (kein echter SSH-Zugang im Docker) ──────
+    ssh_manage_keys: false
+    ssh_verify_after_hardening: false
+    ssh_emergency_key_enabled: false
+    ssh_operator_keys: []
+    ssh_strict_host_checking: false
+
+    # ── Deploy-User: root (existiert sicher im Container) ───────────────────
+    ssh_deploy_user: root
+    ssh_port: 22
+
+    # ── Firewall im Container nicht aktivieren ───────────────────────────────
+    ssh_firewall_enable: false
+    ssh_firewall_rate_limit: false
+
+    # ── Audit-Report in tmp schreiben ────────────────────────────────────────
+    ssh_audit_enabled: false
+
+  pre_tasks:
+    - name: "Converge | Facts sammeln"
+      ansible.builtin.gather_facts: {}
+
+    - name: "Converge | sshd starten"
+      ansible.builtin.service:
+        name: sshd
+        state: started
+        enabled: true
+      failed_when: false
+
+  roles:
+    - role: ssh_hardening

@@ -1,0 +1,41 @@
+---
+# =============================================================================
+# prepare.yml — Minimale Vorbereitung des Test-Containers
+# =============================================================================
+- name: Prepare
+  hosts: all
+  gather_facts: false
+
+  tasks:
+    - name: "Prepare | Python sicherstellen"
+      ansible.builtin.raw: |
+        which python3 2>/dev/null && exit 0
+        apt-get update -qq && apt-get install -y -q python3 2>/dev/null ||
+        dnf install -y python3 2>/dev/null ||
+        yum install -y python3 2>/dev/null
+      changed_when: true
+
+    - name: "Prepare | Facts sammeln"
+      ansible.builtin.gather_facts: {}
+
+    # AIDE benötigt /proc korrekt gemountet — im Docker überspringen wir die DB-Initialisierung.
+    # Dummy-Datenbank vorbereiten damit AIDE-Tasks nicht fehlschlagen.
+    - name: "Prepare | AIDE Verzeichnisse anlegen"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      loop:
+        - /var/lib/aide
+        - /var/log/aide
+
+    - name: "Prepare | AIDE Dummy-DB anlegen (verhindert aide --init im Docker)"
+      ansible.builtin.copy:
+        content: ""
+        dest: /var/lib/aide/aide.db.gz
+        owner: root
+        group: root
+        mode: "0600"
+        force: false
