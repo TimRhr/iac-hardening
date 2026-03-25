@@ -24,6 +24,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Install yamllint
         run: pip install yamllint
@@ -43,6 +44,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Install ansible-lint
         run: pip install ansible-lint
