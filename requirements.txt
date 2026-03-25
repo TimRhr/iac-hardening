@@ -1,0 +1,5 @@
+# CI/CD Python-Abhängigkeiten für GitHub Actions
+# Wird von lint.yml und syntax-check.yml verwendet (cache: pip)
+ansible-core>=2.16
+ansible-lint>=24.2
+yamllint>=1.35

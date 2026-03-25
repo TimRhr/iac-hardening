@@ -33,27 +33,35 @@ jobs:
 
           echo "Suche Vault-Dateien ..."
 
-          # Alle Dateien die 'vault' im Namen haben
           while IFS= read -r -d '' vault_file; do
-            if [ ! -f "$vault_file" ]; then
-              continue
-            fi
+            [ -f "$vault_file" ] || continue
 
             first_line=$(head -1 "$vault_file")
 
             if echo "$first_line" | grep -q "ANSIBLE_VAULT"; then
-              echo "✅ Verschlüsselt:   $vault_file"
+              echo "✅ Verschlüsselt:              $vault_file"
             else
-              echo "❌ NICHT verschlüsselt: $vault_file"
-              echo "   Erste Zeile: $first_line"
-              FAIL=1
+              # Datei ist Klartext — prüfe ob echte (nicht-leere) Secrets vorhanden sind.
+              # Template-Dateien mit nur leeren Werten ("") sind erlaubt (z.B. vault.yml im Repo).
+              # Echte Secrets mit nicht-leerem Wert MÜSSEN verschlüsselt sein.
+              real_values=$(grep -E '^vault_[a-zA-Z_]+: ".{1,}"' "$vault_file" \
+                            | grep -v ': ""' || true)
+
+              if [ -n "$real_values" ]; then
+                echo "❌ NICHT verschlüsselt (echte Secrets gefunden): $vault_file"
+                echo "   Betroffene Zeilen:"
+                echo "$real_values" | sed 's/.*: ".*"/   [WERT VERBORGEN]/'
+                FAIL=1
+              else
+                echo "⚠️  Unverschlüsselt (nur leere Template-Werte — OK): $vault_file"
+              fi
             fi
           done < <(find inventory/ -name "*vault*" -type f -print0 2>/dev/null)
 
           if [ "$FAIL" -eq 1 ]; then
             echo ""
             echo "================================================================"
-            echo "  FEHLER: Unverschlüsselte Vault-Datei(en) gefunden!"
+            echo "  FEHLER: Unverschlüsselte Vault-Datei mit echten Secrets!"
             echo "================================================================"
             echo "  Verschlüsseln mit:"
             echo "    ansible-vault encrypt inventory/group_vars/all/vault.yml"
@@ -65,7 +73,7 @@ jobs:
           fi
 
           echo ""
-          echo "✅ Alle Vault-Dateien sind verschlüsselt."
+          echo "✅ Vault-Check bestanden."
 
       - name: Prüfe auf ausversehentlich committed Secrets
         run: |
