@@ -1,0 +1,101 @@
+---
+# =============================================================================
+# .github/workflows/vault-check.yml
+# Prüft ob Vault-Dateien verschlüsselt sind — verhindert Merge mit Klartexts-Secrets
+# =============================================================================
+name: Vault Encryption Check
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "inventory/**/vault.yml"
+      - "inventory/**/*vault*"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "inventory/**/vault.yml"
+      - "inventory/**/*vault*"
+
+jobs:
+  vault-check:
+    name: Vault Files Encrypted
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prüfe ob Vault-Dateien verschlüsselt sind
+        run: |
+          set -euo pipefail
+          FAIL=0
+
+          echo "Suche Vault-Dateien ..."
+
+          # Alle Dateien die 'vault' im Namen haben
+          while IFS= read -r -d '' vault_file; do
+            if [ ! -f "$vault_file" ]; then
+              continue
+            fi
+
+            first_line=$(head -1 "$vault_file")
+
+            if echo "$first_line" | grep -q "ANSIBLE_VAULT"; then
+              echo "✅ Verschlüsselt:   $vault_file"
+            else
+              echo "❌ NICHT verschlüsselt: $vault_file"
+              echo "   Erste Zeile: $first_line"
+              FAIL=1
+            fi
+          done < <(find inventory/ -name "*vault*" -type f -print0 2>/dev/null)
+
+          if [ "$FAIL" -eq 1 ]; then
+            echo ""
+            echo "================================================================"
+            echo "  FEHLER: Unverschlüsselte Vault-Datei(en) gefunden!"
+            echo "================================================================"
+            echo "  Verschlüsseln mit:"
+            echo "    ansible-vault encrypt inventory/group_vars/all/vault.yml"
+            echo "  Oder mit Passwort-Datei:"
+            echo "    ansible-vault encrypt --vault-password-file .vault_pass \\"
+            echo "      inventory/group_vars/all/vault.yml"
+            echo "================================================================"
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ Alle Vault-Dateien sind verschlüsselt."
+
+      - name: Prüfe auf ausversehentlich committed Secrets
+        run: |
+          set -euo pipefail
+          FAIL=0
+
+          # Bekannte Secret-Muster in YAML-Dateien suchen
+          SECRET_PATTERNS=(
+            "vault_.*: ['\"]?.+['\"]?"        # Vault-Variablen mit Wert
+            "password: ['\"]?.+['\"]?"         # Passwort-Felder
+            "private_key: ['\"]?.+['\"]?"      # Private Keys
+            "aws_secret"                        # AWS Secrets
+            "BEGIN.*PRIVATE KEY"               # PEM Private Keys
+          )
+
+          for pattern in "${SECRET_PATTERNS[@]}"; do
+            # Vault-Dateien überspringen (die sind verschlüsselt)
+            matches=$(grep -r --include="*.yml" --include="*.yaml" \
+              -l -E "$pattern" \
+              inventory/ roles/ playbooks/ 2>/dev/null \
+              | grep -v "vault" \
+              | grep -v ".git" || true)
+
+            if [ -n "$matches" ]; then
+              echo "⚠️  Mögliche Klartexts-Secrets (Muster: $pattern):"
+              echo "$matches" | while read -r file; do
+                echo "   $file"
+              done
+              # Nur warnen, nicht fehlschlagen (können false positives sein)
+            fi
+          done
+
+          echo "Secret-Scan abgeschlossen."

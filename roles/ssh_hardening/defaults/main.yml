@@ -132,6 +132,15 @@ ssh_key_rotation_days: 180           # 6 Monate — BSI-Empfehlung
 ssh_emergency_key_enabled: true
 ssh_emergency_key_local_dir: "{{ ssh_key_local_dir }}/emergency"
 
+# --- Operator-Keys (Multi-Admin-Zugang) -----------------------------------------------
+# Liste von Operatoren die SSH-Zugang zum Deploy-User erhalten.
+# Zwei Formate werden unterstützt:
+#   { name: "alice", key: "ssh-ed25519 AAAA... alice@laptop" }  — Key direkt (Public Key)
+#   { name: "bob",   key_file: "operators/bob.pub" }            — Key aus Datei lesen
+# Public Keys (.pub) können sicher ins Git committed werden (operators/*.pub)
+# Private Keys niemals ins Repo!
+ssh_operator_keys: []
+
 # --- Known Hosts Management --------------------------------------------------
 # Lokale known_hosts Datei für sichere SSH-Verifikation ohne StrictHostKeyChecking=no
 # Verhindert MITM-Angriffe bei Rotation/Verifikation

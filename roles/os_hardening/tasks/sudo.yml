@@ -91,3 +91,30 @@
     mode: "0750"
     state: directory
   tags: [os, sudo]
+
+# ── NOPASSWD-Einschränkung (Bootstrap → Hardened) ────────────────────────────
+# Ersetzt das NOPASSWD: ALL des Bootstrap durch eine minimale Befehls-Liste.
+# Läuft am ENDE von sudo.yml — alle vorherigen Tasks benötigen noch NOPASSWD: ALL.
+
+- name: "Sudo | Deploy-User sudo auf minimale Befehle einschränken"
+  ansible.builtin.copy:
+    content: |
+      # Ansible-managed — deploy user (Hardened — {{ ansible_date_time.date }})
+      # Eingeschränkt durch os_hardening/tasks/sudo.yml (os_restrict_deploy_sudo)
+      # Befehls-Liste konfigurierbar via ssh_deploy_sudo_commands in group_vars
+      {{ ssh_deploy_user }} ALL=(ALL) NOPASSWD: {{ ssh_deploy_sudo_commands | join(', ') }}
+    dest: "/etc/sudoers.d/{{ ssh_deploy_user }}"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "visudo -cf %s"
+  when:
+    - os_restrict_deploy_sudo | default(true)
+    - ssh_deploy_sudo_commands | default([]) | length > 0
+  tags: [os, sudo, restrict]
+
+- name: "Sudo | Info — NOPASSWD bleibt unverändert (os_restrict_deploy_sudo: false)"
+  ansible.builtin.debug:
+    msg: "ℹ️  sudo-Einschränkung übersprungen (os_restrict_deploy_sudo: false)"
+  when: not (os_restrict_deploy_sudo | default(true))
+  tags: [os, sudo, restrict]

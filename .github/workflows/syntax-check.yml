@@ -1,0 +1,81 @@
+---
+# =============================================================================
+# .github/workflows/syntax-check.yml
+# ansible-playbook --syntax-check für alle Playbooks bei jedem Push/PR
+# =============================================================================
+name: Syntax Check
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "playbooks/**"
+      - "roles/**"
+      - "inventory/**"
+      - "requirements.yml"
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  syntax-check:
+    name: Ansible Syntax Check
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        playbook:
+          - playbooks/hardening/site.yml
+          - playbooks/hardening/ssh_only.yml
+          - playbooks/hardening/os_only.yml
+          - playbooks/deployment/bootstrap.yml
+          - playbooks/maintenance/update.yml
+          - playbooks/maintenance/ssh_key_rotation.yml
+          - playbooks/maintenance/emergency_access.yml
+          - playbooks/maintenance/revoke_key.yml
+          - playbooks/maintenance/add_operator_key.yml
+          - playbooks/maintenance/remove_operator_key.yml
+          - playbooks/monitoring/check.yml
+          - playbooks/monitoring/vuln_scan.yml
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Ansible
+        run: pip install ansible-core
+
+      - name: Install Ansible Collections
+        run: |
+          if [ -f requirements.yml ]; then
+            ansible-galaxy collection install -r requirements.yml -p collections/
+          fi
+
+      - name: Create minimal test inventory
+        run: |
+          mkdir -p /tmp/test-inventory
+          cat > /tmp/test-inventory/hosts.yml << 'EOF'
+          all:
+            hosts:
+              test-host:
+                ansible_host: 127.0.0.1
+                ansible_connection: local
+          EOF
+
+      - name: Syntax check — ${{ matrix.playbook }}
+        run: |
+          ansible-playbook \
+            --syntax-check \
+            --inventory /tmp/test-inventory/hosts.yml \
+            ${{ matrix.playbook }}
+        env:
+          ANSIBLE_ROLES_PATH: roles
+          ANSIBLE_COLLECTIONS_PATH: collections
+          # Vault-Variablen für Syntax-Check als leere Strings
+          ANSIBLE_VAULT_PASSWORD_FILE: /dev/null

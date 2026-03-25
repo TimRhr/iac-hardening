@@ -56,3 +56,10 @@ vault_deploy_become_password: ""
 # ── Monitoring / Alerts ───────────────────────────────────────────────────────
 # Webhook-URL für Slack/Teams/Mattermost Alerts (AIDE, fail2ban, etc.)
 vault_alert_webhook_url: ""
+
+# ── Key-Backup (GPG) ──────────────────────────────────────────────────────────
+# GPG-Fingerprint des Backup-Keys für verschlüsselte Off-Site-Backups
+# Ermitteln: gpg --list-keys
+# Backup ausführen: BACKUP_GPG_FINGERPRINT="{{ vault_backup_gpg_fingerprint }}" ./scripts/backup-keys.sh
+# Dokumentation: docs/key-backup.md
+vault_backup_gpg_fingerprint: ""
