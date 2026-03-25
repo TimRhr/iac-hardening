@@ -163,7 +163,7 @@ os_pam_password_minlen: 12
 os_pam_password_minclass: 4      # min. 4 Zeichenklassen (groß/klein/zahl/sonderz.)
 os_pam_password_retry: 3
 os_pam_faillock_deny: 5          # Account nach 5 Fehlversuchen sperren
-os_pam_faillock_unlock_time: 900 # 15 Minuten gesperrt
+os_pam_faillock_unlock_time: 900  # 15 Minuten gesperrt
 os_pam_faillock_findtime: 600    # Zeitfenster für Fehlversuche: 10 Min.
 os_pam_pwhistory_remember: 5     # Letzte 5 Passwörter gesperrt (keine Wiederholung)
 

@@ -96,7 +96,7 @@ ssh_manage_keys: true                # SSH-Keys automatisch generieren & deploye
 ssh_deploy_user: "deploy"            # Benutzer auf dem Server für SSH-Zugang
 ssh_deploy_groups:                   # Gruppen des Deploy-Users
   - "sudo"
-ssh_authorized_keys_exclusive: false # true = nur dieser Key erlaubt (löscht andere)
+ssh_authorized_keys_exclusive: false  # true = nur dieser Key erlaubt (löscht andere)
 
 # Wo werden die generierten Keys lokal gespeichert?
 ssh_key_local_dir: "{{ playbook_dir }}/../../ssh_keys"
@@ -110,8 +110,8 @@ ssh_key_backup_enabled: true
 ssh_key_rotate: false
 
 # --- Verifikation & Rollback -------------------------------------------------
-ssh_verify_after_hardening: true     # SSH-Login nach Hardening automatisch testen
-                                     # Bei Fehler: automatischer Rollback!
+ssh_verify_after_hardening: true  # SSH-Login nach Hardening automatisch testen
+# Bei Fehler: automatischer Rollback!
 
 # --- Audit & Reporting -------------------------------------------------------
 ssh_audit_enabled: true              # Compliance-Report nach Hardening erstellen

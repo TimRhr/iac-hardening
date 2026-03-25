@@ -13,7 +13,8 @@
 #   ansible-vault decrypt inventory/group_vars/all/vault.yml
 #
 # Playbook ausführen:
-#   ansible-playbook playbooks/hardening/site.yml --vault-password-file .vault_pass
+#   ansible-playbook playbooks/hardening/site.yml \
+#     --vault-password-file .vault_pass
 #   oder:
 #   ansible-playbook playbooks/hardening/site.yml --ask-vault-pass
 # =============================================================================
