@@ -1,0 +1,36 @@
+---
+# =============================================================================
+# converge.yml — OS-Hardening-Rolle im Docker-Container anwenden
+# =============================================================================
+- name: Converge
+  hosts: all
+  become: true
+
+  vars:
+    # ── Features die im Docker-Container nicht funktionieren ────────────────
+    bootloader_enabled: false          # kein GRUB im Container
+    apparmor_enabled: false            # kein AppArmor-Kernel-Modul verfügbar
+    aide_enabled: false                # DB-Initialisierung braucht echtes Filesystem
+    os_restrict_deploy_sudo: false     # kein deploy-User im Test-Container
+
+    # ── Logging: kein Remote-Syslog im Test ──────────────────────────────────
+    syslog_remote_enabled: false
+
+    # ── Audit-Report deaktivieren ────────────────────────────────────────────
+    os_audit_enabled: false
+
+    # ── NTP: systemd-timesyncd läuft nicht sicher im Container ──────────────
+    os_ntp_enabled: false
+
+    # ── Lynis: Score-Prüfung deaktivieren (Container-Werte wären zu niedrig) ─
+    lynis_enabled: false
+
+    # ── Schwache Dienste im Container tolerieren ─────────────────────────────
+    os_fail2ban_enabled: false         # kein iptables im Docker
+
+  pre_tasks:
+    - name: "Converge | Facts sammeln"
+      ansible.builtin.gather_facts: {}
+
+  roles:
+    - role: os_hardening

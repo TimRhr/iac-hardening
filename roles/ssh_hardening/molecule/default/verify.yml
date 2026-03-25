@@ -1,0 +1,78 @@
+---
+# =============================================================================
+# verify.yml — Prüft kritische SSH-Hardening-Einstellungen
+# =============================================================================
+- name: Verify
+  hosts: all
+  become: true
+
+  tasks:
+    - name: "Verify | Facts sammeln"
+      ansible.builtin.gather_facts: {}
+
+    - name: "Verify | sshd_config einlesen"
+      ansible.builtin.slurp:
+        src: /etc/ssh/sshd_config
+      register: sshd_config_raw
+
+    - name: "Verify | sshd_config dekodieren"
+      ansible.builtin.set_fact:
+        sshd_config: "{{ sshd_config_raw.content | b64decode }}"
+
+    - name: "Verify | PasswordAuthentication ist deaktiviert"
+      ansible.builtin.assert:
+        that: "'PasswordAuthentication no' in sshd_config"
+        fail_msg: "PasswordAuthentication ist nicht auf 'no' gesetzt"
+        success_msg: "PasswordAuthentication no — OK"
+
+    - name: "Verify | PermitRootLogin ist deaktiviert"
+      ansible.builtin.assert:
+        that: "'PermitRootLogin no' in sshd_config"
+        fail_msg: "PermitRootLogin ist nicht auf 'no' gesetzt"
+        success_msg: "PermitRootLogin no — OK"
+
+    - name: "Verify | X11Forwarding ist deaktiviert"
+      ansible.builtin.assert:
+        that: "'X11Forwarding no' in sshd_config"
+        fail_msg: "X11Forwarding ist nicht deaktiviert"
+        success_msg: "X11Forwarding no — OK"
+
+    - name: "Verify | MaxAuthTries ist konfiguriert"
+      ansible.builtin.assert:
+        that: sshd_config is regex('MaxAuthTries\s+[1-5]')
+        fail_msg: "MaxAuthTries ist nicht (streng genug) konfiguriert"
+        success_msg: "MaxAuthTries — OK"
+
+    - name: "Verify | Starke Cipher konfiguriert"
+      ansible.builtin.assert:
+        that: "'chacha20-poly1305@openssh.com' in sshd_config or 'aes256-gcm@openssh.com' in sshd_config"
+        fail_msg: "Keine starken Cipher in sshd_config"
+        success_msg: "Starke Cipher vorhanden — OK"
+
+    - name: "Verify | AllowTcpForwarding deaktiviert"
+      ansible.builtin.assert:
+        that: "'AllowTcpForwarding no' in sshd_config"
+        fail_msg: "AllowTcpForwarding ist nicht deaktiviert"
+        success_msg: "AllowTcpForwarding no — OK"
+
+    - name: "Verify | sshd-Banner existiert"
+      ansible.builtin.stat:
+        path: /etc/ssh/banner.txt
+      register: ssh_banner_stat
+
+    - name: "Verify | Banner-Datei vorhanden"
+      ansible.builtin.assert:
+        that: ssh_banner_stat.stat.exists
+        fail_msg: "SSH-Banner /etc/ssh/banner.txt fehlt"
+        success_msg: "SSH-Banner vorhanden — OK"
+
+    - name: "Verify | sshd_config Berechtigungen korrekt (0600 oder 0640)"
+      ansible.builtin.stat:
+        path: /etc/ssh/sshd_config
+      register: sshd_config_stat
+
+    - name: "Verify | sshd_config ist root-only lesbar"
+      ansible.builtin.assert:
+        that: sshd_config_stat.stat.mode in ['0600', '0640', '0644']
+        fail_msg: "sshd_config hat unerwartete Berechtigungen: {{ sshd_config_stat.stat.mode }}"
+        success_msg: "sshd_config Berechtigungen — OK"

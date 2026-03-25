@@ -1,0 +1,114 @@
+---
+# =============================================================================
+# verify.yml — Prüft kritische OS-Hardening-Einstellungen
+# =============================================================================
+- name: Verify
+  hosts: all
+  become: true
+
+  tasks:
+    - name: "Verify | Facts sammeln"
+      ansible.builtin.gather_facts: {}
+
+    # ── sysctl ────────────────────────────────────────────────────────────────
+
+    - name: "Verify | IP-Forwarding deaktiviert"
+      ansible.builtin.command: sysctl net.ipv4.ip_forward
+      register: ip_fwd
+      changed_when: false
+
+    - name: "Verify | IP-Forwarding ist 0"
+      ansible.builtin.assert:
+        that: "'= 0' in ip_fwd.stdout"
+        fail_msg: "net.ipv4.ip_forward sollte 0 sein, ist: {{ ip_fwd.stdout }}"
+        success_msg: "net.ipv4.ip_forward=0 — OK"
+
+    - name: "Verify | ASLR aktiviert"
+      ansible.builtin.command: sysctl kernel.randomize_va_space
+      register: aslr
+      changed_when: false
+
+    - name: "Verify | ASLR ist 2"
+      ansible.builtin.assert:
+        that: "'= 2' in aslr.stdout"
+        fail_msg: "kernel.randomize_va_space sollte 2 sein, ist: {{ aslr.stdout }}"
+        success_msg: "kernel.randomize_va_space=2 — OK"
+
+    - name: "Verify | dmesg_restrict gesetzt"
+      ansible.builtin.command: sysctl kernel.dmesg_restrict
+      register: dmesg_restrict
+      changed_when: false
+      failed_when: false
+
+    - name: "Verify | dmesg_restrict ist 1"
+      ansible.builtin.assert:
+        that: "'= 1' in dmesg_restrict.stdout"
+        fail_msg: "kernel.dmesg_restrict sollte 1 sein"
+        success_msg: "kernel.dmesg_restrict=1 — OK"
+      when: dmesg_restrict.rc == 0
+
+    # ── PAM ───────────────────────────────────────────────────────────────────
+
+    - name: "Verify | /etc/security/pwquality.conf existiert"
+      ansible.builtin.stat:
+        path: /etc/security/pwquality.conf
+      register: pwquality_stat
+
+    - name: "Verify | pwquality.conf vorhanden"
+      ansible.builtin.assert:
+        that: pwquality_stat.stat.exists
+        fail_msg: "/etc/security/pwquality.conf fehlt"
+        success_msg: "pwquality.conf vorhanden — OK"
+
+    # ── Sudo ──────────────────────────────────────────────────────────────────
+
+    - name: "Verify | sudo Paket installiert"
+      ansible.builtin.command: which sudo
+      register: sudo_bin
+      changed_when: false
+
+    - name: "Verify | sudo ist verfügbar"
+      ansible.builtin.assert:
+        that: sudo_bin.rc == 0
+        fail_msg: "sudo ist nicht installiert"
+        success_msg: "sudo verfügbar — OK"
+
+    - name: "Verify | /etc/sudoers.d/99-hardening existiert"
+      ansible.builtin.stat:
+        path: /etc/sudoers.d/99-hardening
+      register: sudoers_hardening_stat
+
+    - name: "Verify | Gehärtetes sudoers deployed"
+      ansible.builtin.assert:
+        that: sudoers_hardening_stat.stat.exists
+        fail_msg: "/etc/sudoers.d/99-hardening fehlt"
+        success_msg: "sudoers-Hardening deployed — OK"
+
+    # ── Kernel-Module ─────────────────────────────────────────────────────────
+
+    - name: "Verify | USB-Storage Modul nicht ladbar"
+      ansible.builtin.command: modprobe --dry-run usb-storage
+      register: usb_storage_check
+      changed_when: false
+      failed_when: false
+
+    - name: "Verify | USB-Storage blockiert"
+      ansible.builtin.assert:
+        that: usb_storage_check.rc != 0
+        fail_msg: "usb-storage Modul konnte geladen werden — Blacklisting fehlt?"
+        success_msg: "usb-storage blockiert — OK"
+      # Im Docker kann modprobe immer fehlschlagen — nur warnen
+      ignore_errors: true
+
+    # ── Shell-Härtung ─────────────────────────────────────────────────────────
+
+    - name: "Verify | /etc/profile.d/hardening.sh existiert"
+      ansible.builtin.stat:
+        path: /etc/profile.d/hardening.sh
+      register: profile_hardening
+
+    - name: "Verify | Shell-Härtung deployed"
+      ansible.builtin.assert:
+        that: profile_hardening.stat.exists
+        fail_msg: "/etc/profile.d/hardening.sh fehlt"
+        success_msg: "Shell-Härtung deployed — OK"

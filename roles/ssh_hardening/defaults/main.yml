@@ -125,6 +125,10 @@ ssh_firewall_enable: false           # UFW einschalten (Vorsicht: erst testen!)
 # Rotationszyklus in Tagen (0 = deaktiviert)
 ssh_key_rotation_days: 180           # 6 Monate — BSI-Empfehlung
 
+# Wie lange retired Keys aufbewahrt werden (Tage).
+# Nach Ablauf werden archivierte Keys (id_ed25519.retired.*) automatisch gelöscht.
+ssh_key_retention_days: 365          # 1 Jahr — dann wird der retired Key entfernt
+
 # --- Notfallzugang (Emergency Access) ----------------------------------------
 # Break-Glass Key — Zugang wenn primärer Deploy-Key verloren geht
 # Der Emergency-Key wird ZUSÄTZLICH zum Deploy-Key in authorized_keys hinterlegt.

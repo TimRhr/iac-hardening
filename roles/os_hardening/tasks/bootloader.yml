@@ -67,8 +67,9 @@
 
 - name: "Bootloader | GRUB-Passwort-Hash aus Variable generieren"
   ansible.builtin.shell: |
+    MKPASSWD=$(command -v grub2-mkpasswd-pbkdf2 grub-mkpasswd-pbkdf2 2>/dev/null | head -1)
     echo -e "{{ bootloader_grub_password }}\n{{ bootloader_grub_password }}" \
-      | grub-mkpasswd-pbkdf2 2>/dev/null \
+      | "$MKPASSWD" 2>/dev/null \
       | grep "PBKDF2 hash" \
       | awk '{print $NF}'
   args:
@@ -79,7 +80,8 @@
   when:
     - bootloader_grub_available | default(false)
     - bootloader_grub_password | default('') != ''
-    - bootloader_mkpasswd_available.rc == 0
+    - (bootloader_mkpasswd_available.rc | default(1)) == 0 or
+      (bootloader_mkpasswd2_available.rc | default(1)) == 0
   tags: [os, bootloader, password]
 
 - name: "Bootloader | GRUB-Passwort-Konfiguration deployen"
