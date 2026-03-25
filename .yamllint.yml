@@ -9,7 +9,7 @@ rules:
     allowed-values: ['true', 'false']
     level: error
   comments:
-    min-spaces-before-inline: 2
+    min-spaces-before-inline-comment: 2
     level: error
   comments-indentation:
     level: error
