@@ -1,7 +1,8 @@
 ---
 # =============================================================================
 # .github/workflows/vault-check.yml
-# Prüft ob Vault-Dateien verschlüsselt sind — verhindert Merge mit Klartexts-Secrets
+# Prüft ob Vault-Dateien verschlüsselt sind —
+# verhindert Merge mit Klartexts-Secrets
 # =============================================================================
 name: Vault Encryption Check
 
@@ -41,34 +42,35 @@ jobs:
             if echo "$first_line" | grep -q "ANSIBLE_VAULT"; then
               echo "✅ Verschlüsselt:              $vault_file"
             else
-              # Datei ist Klartext — prüfe ob echte (nicht-leere) Secrets vorhanden sind.
-              # Template-Dateien mit nur leeren Werten ("") sind erlaubt (z.B. vault.yml im Repo).
-              # Echte Secrets mit nicht-leerem Wert MÜSSEN verschlüsselt sein.
+              # Klartext — prüfe ob echte (nicht-leere) Secrets vorhanden sind.
+              # Template-Dateien mit leeren Werten ("") sind erlaubt.
+              # Echte Secrets mit Wert MÜSSEN verschlüsselt sein.
               real_values=$(grep -E '^vault_[a-zA-Z_]+: ".{1,}"' "$vault_file" \
                             | grep -v ': ""' || true)
 
               if [ -n "$real_values" ]; then
-                echo "❌ NICHT verschlüsselt (echte Secrets gefunden): $vault_file"
+                echo "❌ NICHT verschlüsselt: $vault_file"
                 echo "   Betroffene Zeilen:"
                 echo "$real_values" | sed 's/.*: ".*"/   [WERT VERBORGEN]/'
                 FAIL=1
               else
-                echo "⚠️  Unverschlüsselt (nur leere Template-Werte — OK): $vault_file"
+                echo "⚠️  Unverschlüsselt (leere Werte — OK): $vault_file"
               fi
             fi
           done < <(find inventory/ -name "*vault*" -type f -print0 2>/dev/null)
 
           if [ "$FAIL" -eq 1 ]; then
             echo ""
-            echo "================================================================"
+            echo "========================================================"
             echo "  FEHLER: Unverschlüsselte Vault-Datei mit echten Secrets!"
-            echo "================================================================"
+            echo "========================================================"
             echo "  Verschlüsseln mit:"
             echo "    ansible-vault encrypt inventory/group_vars/all/vault.yml"
             echo "  Oder mit Passwort-Datei:"
-            echo "    ansible-vault encrypt --vault-password-file .vault_pass \\"
+            echo "    ansible-vault encrypt \\"
+            echo "      --vault-password-file .vault_pass \\"
             echo "      inventory/group_vars/all/vault.yml"
-            echo "================================================================"
+            echo "========================================================"
             exit 1
           fi
 
