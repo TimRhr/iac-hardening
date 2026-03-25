@@ -245,7 +245,10 @@
       - "  BSI SYS.1.3.A4 · Crypto-Hygiene"
       - "============================================="
       - "  Host:           {{ inventory_hostname }}"
-      - "  Rotation:       {{ 'durchgeführt' if (rotation_needed and 'ROTATION_OK' in (rotation_verify.stdout | default(''))) else ('nicht nötig' if not rotation_needed else 'FEHLGESCHLAGEN') }}"
+      - >-
+        Rotation: {{ 'durchgeführt'
+        if (rotation_needed and 'ROTATION_OK' in (rotation_verify.stdout | default('')))
+        else ('nicht nötig' if not rotation_needed else 'FEHLGESCHLAGEN') }}
       - "  Key-Alter:      {{ rotation_key_age_days | default('neu') }} Tage"
       - "  Nächste:        in {{ ssh_key_rotation_days }} Tagen"
       - "  Aktiver Key:    {{ ssh_key_local_dir }}/{{ inventory_hostname }}/id_ed25519"

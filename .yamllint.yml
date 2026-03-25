@@ -1,0 +1,23 @@
+---
+extends: default
+
+rules:
+  line-length:
+    max: 120
+    level: error
+  truthy:
+    allowed-values: ['true', 'false']
+    level: error
+  comments:
+    min-spaces-before-inline: 2
+    level: error
+  comments-indentation:
+    level: error
+  braces:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+    level: error
+  colons:
+    max-spaces-before: 0
+    max-spaces-after: 1
+    level: error

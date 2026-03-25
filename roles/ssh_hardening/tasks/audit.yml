@@ -112,5 +112,7 @@
 
 - name: "Audit | Report-Pfad anzeigen"
   ansible.builtin.debug:
-    msg: "📋 Compliance-Report gespeichert: {{ ssh_report_dir }}/{{ inventory_hostname }}_ssh_report_{{ ansible_date_time.date }}.txt"
+    msg: >-
+      Compliance-Report gespeichert:
+      {{ ssh_report_dir }}/{{ inventory_hostname }}_ssh_report_{{ ansible_date_time.date }}.txt
   tags: [ssh, audit]
