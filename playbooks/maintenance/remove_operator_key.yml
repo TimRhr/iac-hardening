@@ -1,0 +1,134 @@
+---
+# =============================================================================
+# playbooks/maintenance/remove_operator_key.yml
+# Operator-Key von Hosts entfernen (Ausscheiden, Schlüsselwechsel)
+#
+# VERWENDUNG:
+#   # Per Operator-Name (entfernt Key mit Kommentar "operator-<name>"):
+#   ansible-playbook playbooks/maintenance/remove_operator_key.yml \
+#     -e "operator_name=alice"
+#
+#   # Per Key-Datei (eindeutig):
+#   ansible-playbook playbooks/maintenance/remove_operator_key.yml \
+#     -e "operator_name=bob" \
+#     -e "operator_key_file=operators/bob.pub"
+#
+#   # Per Key-String:
+#   ansible-playbook playbooks/maintenance/remove_operator_key.yml \
+#     -e "operator_name=alice" \
+#     -e "operator_key='ssh-ed25519 AAAA...'"
+#
+#   # Nur auf bestimmten Hosts:
+#   ansible-playbook playbooks/maintenance/remove_operator_key.yml \
+#     -e "operator_name=alice" --limit webservers
+#
+#   # Dry-Run (zeigt was entfernt würde):
+#   ansible-playbook playbooks/maintenance/remove_operator_key.yml \
+#     -e "operator_name=alice" --check
+#
+# DANACH: Key auch aus ssh_operator_keys in group_vars entfernen,
+#         damit er beim nächsten Hardening-Run nicht wieder deployt wird!
+# =============================================================================
+
+- name: "Bootstrap | Python sicherstellen"
+  hosts: all
+  gather_facts: false
+  become: true
+  tags: [always]
+  tasks:
+    - ansible.builtin.raw: |
+        test -e /usr/bin/python3 || (apt-get update -qq && apt-get install -y python3)
+      changed_when: false
+
+- name: "🚫 Operator-Key entfernen"
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    operator_name: ""       # Pflicht: Name des Operators
+    operator_key: ""        # Option 1: Public Key als String
+    operator_key_file: ""   # Option 2: Pfad zur .pub-Datei (lokal auf Controller)
+
+  pre_tasks:
+    - name: "Validierung | operator_name prüfen"
+      ansible.builtin.fail:
+        msg: "Pflichtparameter fehlt: -e \"operator_name=<name>\""
+      when: operator_name == ""
+      tags: [always]
+
+    - name: "Vorbereitung | Key-Inhalt aus Datei laden"
+      ansible.builtin.set_fact:
+        operator_key_content: "{{ lookup('ansible.builtin.file', operator_key_file) }}"
+      when: operator_key_file != ""
+      tags: [always]
+
+    - name: "Vorbereitung | Key-Inhalt aus Parameter"
+      ansible.builtin.set_fact:
+        operator_key_content: "{{ operator_key }}"
+      when: operator_key != ""
+      tags: [always]
+
+  tasks:
+    # ── Entfernen per Key (File oder String) ──────────────────────────────────
+    - name: "Operator Key | Key per Datei/String entfernen"
+      ansible.posix.authorized_key:
+        user: "{{ ssh_deploy_user }}"
+        state: absent
+        key: "{{ operator_key_content }}"
+      when: operator_key != "" or operator_key_file != ""
+      tags: [ssh, operators]
+
+    # ── Entfernen per Kommentar-Muster (wenn kein Key-Inhalt angegeben) ───────
+    - name: "Operator Key | Key per Kommentar-Muster entfernen"
+      ansible.builtin.shell: |
+        authkeys="/home/{{ ssh_deploy_user }}/.ssh/authorized_keys"
+        if [ -f "$authkeys" ]; then
+          grep -v "operator-{{ operator_name }}" "$authkeys" > /tmp/authorized_keys_new
+          mv /tmp/authorized_keys_new "$authkeys"
+          chown {{ ssh_deploy_user }}:{{ ssh_deploy_user }} "$authkeys"
+          chmod 600 "$authkeys"
+          echo "DONE"
+        else
+          echo "FILE_NOT_FOUND"
+        fi
+      args:
+        executable: /bin/bash
+      register: remove_by_comment
+      changed_when: "'DONE' in remove_by_comment.stdout"
+      when: operator_key == "" and operator_key_file == ""
+      tags: [ssh, operators]
+
+    # ── Verifikation ──────────────────────────────────────────────────────────
+    - name: "Operator Key | Prüfe ob Key noch vorhanden ist"
+      ansible.builtin.shell: |
+        grep -c "operator-{{ operator_name }}" \
+          /home/{{ ssh_deploy_user }}/.ssh/authorized_keys 2>/dev/null || echo "0"
+      args:
+        executable: /bin/bash
+      register: key_still_present
+      changed_when: false
+      failed_when: false
+      tags: [ssh, operators]
+
+    - name: "Operator Key | WARNUNG — Key noch in authorized_keys"
+      ansible.builtin.debug:
+        msg: "⚠️  Key 'operator-{{ operator_name }}' noch vorhanden! Manuell prüfen."
+      when: (key_still_present.stdout | int) > 0
+      tags: [ssh, operators]
+
+    - name: "Operator Key | ✅ Zusammenfassung"
+      ansible.builtin.debug:
+        msg:
+          - "======================================================="
+          - "  Operator-Key entfernt"
+          - "======================================================="
+          - "  Host:      {{ inventory_hostname }}"
+          - "  Operator:  {{ operator_name }}"
+          - "  Status:    {{ '✅ Entfernt' if (key_still_present.stdout | int) == 0 else '⚠️  Noch vorhanden' }}"
+          - "======================================================="
+          - "  ⚠️  NÄCHSTER SCHRITT: Aus ssh_operator_keys entfernen:"
+          - "  Datei: inventory/group_vars/all/main.yml"
+          - "  Sonst wird der Key beim nächsten Hardening-Run neu deployt!"
+          - "======================================================="
+      tags: [ssh, operators]

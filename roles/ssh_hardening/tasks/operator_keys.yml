@@ -1,0 +1,41 @@
+---
+# =============================================================================
+# SSH Hardening | Task-Datei: Operator Key Management
+# Deployt Public Keys mehrerer Operatoren additiv auf alle Hosts.
+#
+# Zweck: Mehrere Admins/Operatoren bekommen SSH-Zugang zum Deploy-User,
+#        ohne den primären Deploy-Key zu ersetzen. Bei Ausfall eines
+#        Operators kann ein Kollege übernehmen.
+#
+# Konfiguration in group_vars/all/main.yml oder host_vars/:
+#   ssh_operator_keys:
+#     - name: alice
+#       key: "ssh-ed25519 AAAA... alice@laptop"
+#     - name: bob
+#       key_file: "operators/bob.pub"
+#
+# WICHTIG:
+#   - Operator-Keys nie exklusiv — exclusive: false (löscht keine anderen Keys)
+#   - Public Keys können ins Git (.pub Dateien sind öffentlich)
+#   - Bei Ausscheiden: remove_operator_key.yml ausführen
+# =============================================================================
+
+- name: "Operator Keys | {{ ssh_operator_keys | length }} Operator-Key(s) deployen"
+  ansible.posix.authorized_key:
+    user: "{{ ssh_deploy_user }}"
+    state: present
+    key: "{{ item.key if 'key' in item else lookup('ansible.builtin.file', item.key_file) }}"
+    comment: "operator-{{ item.name }}"
+    exclusive: false
+  loop: "{{ ssh_operator_keys }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: [ssh, keys, operators]
+
+- name: "Operator Keys | ✅ Zusammenfassung"
+  ansible.builtin.debug:
+    msg:
+      - "✅ Operator-Keys deployt auf {{ inventory_hostname }}"
+      - "   Operatoren: {{ ssh_operator_keys | map(attribute='name') | list | join(', ') }}"
+      - "   Zugang:     ssh -i <operator-key> -p {{ ssh_port }} {{ ssh_deploy_user }}@{{ ansible_host }}"
+  tags: [ssh, keys, operators]

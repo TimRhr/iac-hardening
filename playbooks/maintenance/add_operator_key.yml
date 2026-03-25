@@ -1,0 +1,118 @@
+---
+# =============================================================================
+# playbooks/maintenance/add_operator_key.yml
+# Einzelnen Operator-Key zu Hosts hinzufügen
+#
+# Verwendung für dauerhaften Zugang (empfohlen — IaC):
+#   1. Key zu ssh_operator_keys in group_vars/all/main.yml hinzufügen
+#   2. ansible-playbook playbooks/hardening/ssh_only.yml --tags keys
+#
+# Verwendung für Ad-hoc-Zugang (schnelle Einrichtung):
+#   # Key per String:
+#   ansible-playbook playbooks/maintenance/add_operator_key.yml \
+#     -e "operator_name=alice" \
+#     -e "operator_key='ssh-ed25519 AAAA... alice@laptop'"
+#
+#   # Key per Datei:
+#   ansible-playbook playbooks/maintenance/add_operator_key.yml \
+#     -e "operator_name=bob" \
+#     -e "operator_key_file=operators/bob.pub"
+#
+#   # Nur auf bestimmten Hosts:
+#   ansible-playbook playbooks/maintenance/add_operator_key.yml \
+#     -e "operator_name=alice" \
+#     -e "operator_key='...'" \
+#     --limit webservers
+#
+# HINWEIS: Für dauerhaften Zugang ssh_operator_keys in group_vars pflegen.
+#          Ad-hoc-Keys werden beim nächsten Hardening-Run nicht neu deployt.
+# =============================================================================
+
+- name: "Bootstrap | Python sicherstellen"
+  hosts: all
+  gather_facts: false
+  become: true
+  tags: [always]
+  tasks:
+    - ansible.builtin.raw: |
+        test -e /usr/bin/python3 || (apt-get update -qq && apt-get install -y python3)
+      changed_when: false
+
+- name: "🔑 Operator-Key hinzufügen"
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    operator_name: ""       # Pflicht: Name des Operators (z.B. "alice")
+    operator_key: ""        # Option 1: Public Key als String
+    operator_key_file: ""   # Option 2: Pfad zur .pub-Datei (lokal auf Controller)
+
+  pre_tasks:
+    - name: "Validierung | Parameter prüfen"
+      ansible.builtin.fail:
+        msg: |
+          Pflichtparameter fehlt!
+          Verwendung:
+            -e "operator_name=alice operator_key='ssh-ed25519 AAAA...'"
+            -e "operator_name=bob operator_key_file=operators/bob.pub"
+      when:
+        - operator_name == ""
+        - operator_key == "" and operator_key_file == ""
+      tags: [always]
+
+    - name: "Validierung | Key-Datei prüfen"
+      ansible.builtin.stat:
+        path: "{{ operator_key_file }}"
+      register: key_file_stat
+      delegate_to: localhost
+      become: false
+      when: operator_key_file != ""
+      tags: [always]
+
+    - name: "Validierung | Key-Datei nicht gefunden"
+      ansible.builtin.fail:
+        msg: "Key-Datei nicht gefunden: {{ operator_key_file }}"
+      when:
+        - operator_key_file != ""
+        - not key_file_stat.stat.exists
+      tags: [always]
+
+    - name: "Vorbereitung | Key-Inhalt aus Datei laden"
+      ansible.builtin.set_fact:
+        operator_key_content: "{{ lookup('ansible.builtin.file', operator_key_file) }}"
+      when: operator_key_file != ""
+      tags: [always]
+
+    - name: "Vorbereitung | Key-Inhalt aus Parameter"
+      ansible.builtin.set_fact:
+        operator_key_content: "{{ operator_key }}"
+      when: operator_key != ""
+      tags: [always]
+
+  tasks:
+    - name: "Operator Key | Key in authorized_keys hinterlegen"
+      ansible.posix.authorized_key:
+        user: "{{ ssh_deploy_user }}"
+        state: present
+        key: "{{ operator_key_content }}"
+        comment: "operator-{{ operator_name }}"
+        exclusive: false
+      tags: [ssh, operators]
+
+    - name: "Operator Key | ✅ Zusammenfassung"
+      ansible.builtin.debug:
+        msg:
+          - "======================================================="
+          - "  Operator-Key hinzugefügt"
+          - "======================================================="
+          - "  Host:      {{ inventory_hostname }}"
+          - "  Operator:  {{ operator_name }}"
+          - "  User:      {{ ssh_deploy_user }}@{{ ansible_host }}:{{ ssh_port }}"
+          - "======================================================="
+          - "  ⚠️  Für dauerhaften Zugang in ssh_operator_keys eintragen:"
+          - "  ssh_operator_keys:"
+          - "    - name: {{ operator_name }}"
+          - "      key: \"{{ operator_key_content[:60] }}...\""
+          - "======================================================="
+      tags: [ssh, operators]

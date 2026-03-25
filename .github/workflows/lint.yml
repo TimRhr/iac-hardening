@@ -1,0 +1,58 @@
+---
+# =============================================================================
+# .github/workflows/lint.yml
+# Ansible-Lint + YAML-Lint bei jedem Push und Pull Request
+# =============================================================================
+name: Lint
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  yamllint:
+    name: YAML Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Run yamllint
+        run: yamllint -c .yamllint.yml . || yamllint .
+
+  ansible-lint:
+    name: Ansible Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install ansible-lint
+        run: pip install ansible-lint
+
+      - name: Install Ansible Collections
+        run: |
+          ansible-galaxy collection install -r requirements.yml -p collections/ \
+            || echo "requirements.yml nicht gefunden — überspringe Collection-Install"
+
+      - name: Run ansible-lint
+        run: ansible-lint --profile production --exclude collections/
+        env:
+          ANSIBLE_ROLES_PATH: roles
